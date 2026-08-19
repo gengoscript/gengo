@@ -19,9 +19,8 @@ something else.
 
 ## Run it
 
-`net.listen` needs both a scope grant and a policy rule — the listen
-policy defaults to deny-all, deliberately the opposite of `net.dial`'s
-default-allow (see `docs/security.md`).
+Both `net.listen` and `net.dial` need a scope grant and a policy rule — both
+default to deny-all with no rules configured (see `docs/security.md`).
 
 ```bash
 gengo --cap net=listen --net-listen-allow "*:7370" examples/time-server/time_server.gengo
@@ -30,7 +29,7 @@ gengo --cap net=listen --net-listen-allow "*:7370" examples/time-server/time_ser
 In another terminal:
 
 ```bash
-gengo --cap net=dial examples/time-server/check_time.gengo
+gengo --cap net=dial --net-dial-allow "127.0.0.1:7370" examples/time-server/check_time.gengo
 ```
 
 Expected output from the client:

@@ -1312,7 +1312,7 @@ export fn engine_net_policy_add(handle: i32, action: i32, pattern_ptr: PtrInt, p
 }
 
 /// Clear all dial policy rules for the engine. After this call the default
-/// (allow all) is restored.
+/// (deny all, #221) is restored.
 export fn engine_net_policy_clear(handle: i32) void {
     const engine = getEngine(handle) orelse return;
     engine.runtime.inner.net_es.policy = .{};
@@ -1321,8 +1321,8 @@ export fn engine_net_policy_clear(handle: i32) void {
 /// Add a listen (bind) policy rule for cap:net. Same rule shape and LIFO
 /// evaluation as engine_net_policy_add, but for net.listen rather than
 /// net.dial, and evaluated against the requested bind address.
-/// Unlike dial: no rules installed means listen always fails (default-deny,
-/// not default-allow) — a host must add at least one allow rule before any
+/// Same default-deny as dial (#221): no rules installed means listen always
+/// fails — a host must add at least one allow rule before any
 /// net.listen(...) call in this engine will succeed.
 /// Returns 0 on success, -1 for invalid handle, -2 if the rule list is full,
 /// -3 for an invalid pattern.
@@ -2079,8 +2079,13 @@ test "engine_net_listen_policy checkListenPolicy default-deny semantics" {
 }
 
 test "engine_net_policy checkDialPolicy semantics" {
-    // Default allow: no rules
+    // Default deny: no rules (#221 — flipped from the original default-allow)
     net_state.clearPolicy();
+    try std.testing.expect(!net_state.checkDialPolicy("192.168.1.1:80"));
+
+    // Explicit allow-all
+    net_state.clearPolicy();
+    _ = net_state.addPolicyRule(.allow, "*", 0);
     try std.testing.expect(net_state.checkDialPolicy("192.168.1.1:80"));
 
     // Deny all, then allow one IP (LIFO: allow is added last → evaluated first)

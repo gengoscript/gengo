@@ -387,13 +387,13 @@ engine_run(h, src, (int32_t)strlen(src));
 
 ## Net Dial Policy
 
-`cap:net` is unrestricted by default — any script with the capability can dial any address. `engine_net_policy_add` lets the host add allow/deny rules that gate every `net.dial()` call without replacing the entire net handler.
+`cap:net` dial is deny-by-default (#221): a script with the capability cannot dial anything until the host adds at least one allow rule. `engine_net_policy_add` lets the host add allow/deny rules that gate every `net.dial()` call without replacing the entire net handler.
 
 ### Evaluation model
 
-Rules form a stack. The **most recently added rule is evaluated first**. The first matching rule wins. If no rule matches, the default is **allow** — so with no rules set, behaviour is unchanged from today.
+Rules form a stack. The **most recently added rule is evaluated first**. The first matching rule wins. If no rule matches, the default is **deny** — with no rules set, `net.dial(...)` refuses every call.
 
-To restrict to an allowlist, add a `deny *` rule first, then add `allow` rules for what you want to permit. Because `allow` rules are added after (and therefore evaluated before) the `deny *`, they take priority:
+To restrict to an allowlist, add `allow` rules for what you want to permit — a leading `deny *` is optional (no rules already means deny), but explicit is fine too. Because rules are evaluated most-recently-added-first, a later `allow` still overrides an earlier blanket `deny *`:
 
 ```c
 engine_net_policy_add(h, 0, "*", 1, 0);              // deny all   (added first, evaluated last)
@@ -430,18 +430,14 @@ Returns:
 
 ### `engine_net_policy_clear(handle) -> void`
 
-Remove all rules. Default-allow is restored.
+Remove all rules. Default-deny is restored — with the list empty, `net.dial(...)` refuses every call again.
 
 ### Net-policy C example
 
 ```c
 /* Allowlist: only internal network and one external API */
-engine_net_policy_add(h, 0, "*", 1, 0);
 engine_net_policy_add(h, 1, "10.0.0.0/8", 8, 0);
 engine_net_policy_add(h, 1, "api.example.com", 15, 443);
-
-/* Single deny: block one bad actor, allow everything else */
-engine_net_policy_add(h, 0, "198.51.100.0/24", 15, 0);
 ```
 
 ## Runtime Introspection

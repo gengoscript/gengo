@@ -167,10 +167,12 @@ Deadline values accept integers and floats, with floats truncated toward zero.
 Handle misuse and an unavailable socket host implementation are runtime
 capability errors; read, write, and dial failures return error values.
 
-The native dial policy allows all destinations when it has no rules. This is
-not a safe default for untrusted scripts: hosts should install explicit deny
-or allow rules and enforce DNS, IPv4/IPv6, private-address, port, timeout, and
-byte limits. Read `security.md` before enabling either network capability.
+The native dial policy denies all destinations when it has no rules (#221) —
+a host must add at least one explicit allow rule (`engine_net_policy_add`, or
+`--net-dial-allow` on the CLI) before `net.dial(...)` succeeds on anything.
+Hosts should still enforce DNS, IPv4/IPv6, private-address, port, timeout,
+and byte limits via their allow rules and dial callback. Read `security.md`
+before enabling either network capability.
 
 ### Scopes: `dial` vs `listen`
 
@@ -211,8 +213,8 @@ There is no `listener.read`/`.write` — all data I/O happens on the `Conn`
 objects `accept()` hands out, using the exact same API `dial()`-produced
 connections already have.
 
-**The listen policy defaults to deny-all**, unlike dial's default-allow: a
-host must affirmatively add at least one allow rule (via
+**The listen policy defaults to deny-all**, same as dial's (#221): a host
+must affirmatively add at least one allow rule (via
 `engine_net_listen_policy_add`) before `net.listen(...)` will succeed on
 anything. This is a separate rule list from the dial policy — adding a dial
 rule has no effect on what listen allows, and vice versa. See

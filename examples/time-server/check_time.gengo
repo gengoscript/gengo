@@ -1,7 +1,7 @@
 // Client for time_server.gengo: connects, reads the 4-byte RFC 868
 // response, and decodes it back to a calendar time.
 //
-// Run: gengo --cap net=dial check_time.gengo
+// Run: gengo --cap net=dial --net-dial-allow "127.0.0.1:7370" check_time.gengo
 
 std := import("std")
 net := import("cap:net")

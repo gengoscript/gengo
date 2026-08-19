@@ -88,27 +88,26 @@ For `cap:fs`, scripts can only reach host-registered mounts. Absolute paths and 
 
 ### Network and HTTP policy
 
-Do not enable `cap:http` or `cap:net` for untrusted scripts with an implicit
-allow-all policy. In particular, the current native network dial policy allows
-all destinations when it has no rules. The host must provide the restriction;
-the VM cannot infer a safe destination from a URL or address string.
+Do not enable `cap:http` for untrusted scripts without a host-side allow
+policy — `cap:http` has no built-in policy engine of its own; its callback is
+host authority, and the VM cannot infer a safe destination from a URL string.
+`cap:net`'s native dial and listen policies (below) do have a built-in engine,
+and both now default to deny with no rules configured (#221) — a host must
+add at least one explicit allow rule, via `engine_net_policy_add` (dial) or
+`engine_net_listen_policy_add` (listen), or `--net-dial-allow`/
+`--net-listen-allow` on the CLI, before either succeeds on anything.
 
 `net`'s `listen` scope (inbound sockets, via `net.listen`/`Listener.accept`)
-is a materially bigger authority than `dial` and is gated deliberately
-differently on two axes:
-
-- **Enablement is scoped, not implicit.** `--cap net` alone (bare, no `=`)
-  has always meant dial-only and continues to on upgrade — it never
-  silently starts granting listen. A host must explicitly opt in with
-  `--cap net=listen` or `--cap net=dial,listen`.
-- **Policy defaults to deny, not allow.** Unlike dial's default-allow, the
-  listen (bind) policy refuses everything until the host adds at least one
-  explicit allow rule via `engine_net_listen_policy_add`. This is a
-  deliberately different default from dial's: a bad dial destination is one
-  outbound request the script chose; an open listening port that mishandles
-  input is remotely reachable, by anyone, indefinitely, regardless of what
-  the script does. The dial and listen policy rule lists are entirely
-  separate — configuring one has no effect on the other.
+is still a materially bigger authority than `dial`, and enablement is scoped,
+not implicit, to reflect that: `--cap net` alone (bare, no `=`) has always
+meant dial-only and continues to on upgrade — it never silently starts
+granting listen. A host must explicitly opt in with `--cap net=listen` or
+`--cap net=dial,listen`. The rationale for treating listen as bigger than
+dial still holds even with matching policy defaults: a bad dial destination
+is one outbound request the script chose; an open listening port that
+mishandles input is remotely reachable, by anyone, indefinitely, regardless
+of what the script does. The dial and listen policy rule lists are entirely
+separate — configuring one has no effect on the other.
 
 A host allowing `listen` should also consider that listening sockets are
 long-lived by nature: two independent `Runtime`s sharing one embedding

@@ -2,6 +2,20 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-08-19
+
+### Security — `cap:net` dial policy now defaults to deny, not allow (#221)
+
+`checkDialPolicy` (`net_state.zig`) previously allowed any destination when
+no dial policy rules were configured, unlike `checkListenPolicy`'s existing
+default-deny — an inconsistency found while reviewing an external security
+audit and confirmed against the code. Flipped dial's no-rules fallback to
+deny, matching listen: a host must now add at least one explicit allow rule
+(`engine_net_policy_add`, or the CLI's new `--net-dial-allow pattern[:port]`,
+mirroring `--net-listen-allow`) before `net.dial(...)`/`net.dial_tls(...)`
+succeed on anything. Breaking change for any embedder currently granting
+`cap:net` dial with zero configured rules.
+
 ## 2026-07-28 (v0.6.0-pre2)
 
 ### stdlib — `std.crypto` gains 6 new primitives

@@ -5386,6 +5386,73 @@ test "cap:net listen: default-deny refuses listen with no policy rules" {
     }
 }
 
+// #221: dial's no-rules default flipped from allow to deny, matching listen
+// above. dial scope is granted (bare "net") but zero policy rules are
+// configured, so every dial must be refused — net.dial itself is not a
+// [value, error] pair like listen, so std.core.is_error is used instead.
+test "cap:net dial: default-deny refuses dial with no policy rules" {
+    net_state.clearPolicyRules();
+    defer net_state.clearPolicyRules();
+
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{"net"},
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    switch (rt.run(
+        \\std := import("std")
+        \\net := import("cap:net")
+        \\func testDial() bool {
+        \\    conn := net.dial("tcp", "127.0.0.1:1")
+        \\    return std.core.is_error(conn)
+        \\}
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+    switch (rt.call("testDial", &.{})) {
+        .ok => |v| try std.testing.expect(v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+}
+
+// An explicit allow rule must still let a dial reach the real network
+// attempt — proven by distinguishing "refused by policy" (net_state never
+// let the dial through) from a genuine connection-level failure (it did).
+// Nothing listens on 127.0.0.1:1 (a privileged, normally-unbound port), so
+// an allowed dial fails at the OS/connect level instead.
+test "cap:net dial: explicit allow rule lets dial reach the real connect attempt" {
+    net_state.clearPolicyRules();
+    defer net_state.clearPolicyRules();
+    _ = net_state.addPolicyRule(.allow, "*", 0);
+
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{"net"},
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    switch (rt.run(
+        \\std := import("std")
+        \\net := import("cap:net")
+        \\func testDial() string {
+        \\    conn := net.dial("tcp", "127.0.0.1:1")
+        \\    if std.core.is_error(conn) { return string(conn) }
+        \\    return "ok"
+        \\}
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+    switch (rt.call("testDial", &.{})) {
+        .ok => |v| try std.testing.expect(!std.mem.eql(u8, try vms.asStringValue(v), "net.dial: refused by policy")),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+}
+
 fn netListenClientWorker(port: u16, connected: *std.atomic.Value(bool), echoed: *std.atomic.Value(bool)) void {
     const sock = std.posix.system.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
     if (std.posix.errno(sock) != .SUCCESS) return;

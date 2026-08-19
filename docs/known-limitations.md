@@ -45,7 +45,6 @@ The relevant specifications include
 | Area | Current behaviour | Practical consequence |
 |---|---|---|
 | Operation budgets | The VM budget counts VM instructions, not work performed by host callbacks. | HTTP, filesystem, and custom host callbacks need their own time, size, and allocation limits. |
-| Network default | The native dial policy permits all destinations when it has no rules. | Install an explicit default-deny address and port policy before enabling `cap:net` for untrusted scripts. |
 | Filesystem mounts | Mount-path validation rejects absolute paths and traversal, but cannot itself settle symlink, race, device-file, or quota policy. | Use a virtual or dedicated read-only driver and enforce host-side quotas. |
 | Runtime instances | Separate engines have separate VM state but share a process and its native code. | Multiple engines are not an OS sandbox and do not contain memory-unsafe host code. |
 
@@ -58,6 +57,8 @@ by tests:
   function.
 - `cap:env` is a separate capability module, not a `std` namespace.
 - Source-import cycles fail at compile time with `ImportCycle`.
+- `cap:net` dial policy defaults to deny, not allow, with no rules configured
+  — same default as listen (#221).
 
 When a limitation is resolved, update its conformance test, this page, the
 feature matrix, and the changelog in the same change.

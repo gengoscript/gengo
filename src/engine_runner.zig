@@ -771,6 +771,14 @@ fn testNetCapabilityHandlers() void {
     // this runtime's net_es (which activate() has already pointed g_state at),
     // not into g_default_state which becomes unreachable once the runtime is active.
     net_state.setNetHandlers(handlers, @ptrCast(&state));
+    // Dial policy now defaults to deny with no rules (#221) — this test dials
+    // a mock handler, not a real destination, so an explicit allow-all rule
+    // is the right fixture setup, not a security concern. Must target
+    // rt.inner.net_es.policy directly, not the addPolicyRule/g_default_state
+    // path: that path is for pre-Runtime setup only (see its doc comment) and
+    // redirects g_state away from the already-active runtime, the same
+    // hazard the comment above about setNetHandlers ordering warns about.
+    _ = net_state.addRuleTo(&rt.inner.net_es.policy, .allow, "*", 0);
 
     const test_src =
         \\net := import("cap:net")
@@ -834,6 +842,8 @@ fn testNetCapabilityHandlers() void {
 
     // `state` is stack-local to this function; the runtime's net_es.handlers must
     // not keep a pointer to it once we return (see testNetCapabilityHandlersCleanup).
+    // The policy rule added above lives in rt.inner.net_es, not global state,
+    // so it needs no separate cleanup.
     net_state.resetHandlers();
 
     out("  net capability handlers: OK\n");

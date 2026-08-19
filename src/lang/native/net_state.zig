@@ -319,15 +319,18 @@ fn endsWithIgnoreCase(haystack: []const u8, suffix: []const u8) bool {
     return eqlIgnoreCase(haystack[haystack.len - suffix.len ..], suffix);
 }
 
-// Returns true if the dial is allowed. No rules → allow (default; same as
-// current behaviour).
+// Returns true if the dial is allowed. No rules → DENY (#221: flipped from
+// the original default-allow — an unconfigured policy must not silently
+// permit unrestricted outbound access for a capability model built around
+// untrusted scripts). Now symmetric with checkListenPolicy below: a host
+// must affirmatively add at least one allow rule before either dial or
+// listen succeeds on anything.
 pub fn checkDialPolicy(address: []const u8) bool {
-    return matchPolicy(&g_state.policy, address, true);
+    return matchPolicy(&g_state.policy, address, false);
 }
 
-// Returns true if the bind is allowed. No rules → DENY — listen is a bigger
-// authority than dial (see design note §4), so absence of configuration must
-// not silently permit anything, unlike dial's default-allow.
+// Returns true if the bind is allowed. No rules → DENY, same reasoning as
+// checkDialPolicy above (they used to differ; see #221).
 pub fn checkListenPolicy(address: []const u8) bool {
     return matchPolicy(&g_state.listen_policy, address, false);
 }

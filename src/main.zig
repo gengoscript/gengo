@@ -284,7 +284,7 @@ fn parseHeapSize(s: []const u8) usize {
     return n * multiplier;
 }
 
-// Splits a --net-listen-allow value into (pattern, port). Bracketed form
+// Splits a --net-listen-allow/--net-dial-allow value into (pattern, port). Bracketed form
 // ("[::1]:8080" or bare "[::]") is IPv6-safe; otherwise splits on the last
 // ':' only when the tail parses as a port number, so a bare pattern with no
 // port (e.g. "*.example.com" or unbracketed "::1") is never misread as
@@ -505,6 +505,9 @@ fn runCli(argv: []const []const u8) void {
             io.write("  --net-listen-allow pattern[:port]  Allow net.listen to bind a matching\n");
             io.write("                     address (repeatable); listen refuses everything\n");
             io.write("                     with no rules\n");
+            io.write("  --net-dial-allow pattern[:port]  Allow net.dial to reach a matching\n");
+            io.write("                     address (repeatable); dial refuses everything\n");
+            io.write("                     with no rules\n");
             io.write("  --modules <path>   Allow imports from an extra directory (repeatable)\n");
             io.write("  --max-ops <n>      Limit instruction count (0 = unlimited)\n");
             io.write("  --heap <size>      Set GC heap size, e.g. 4m, 512k (default 1m)\n");
@@ -648,6 +651,23 @@ fn runCli(argv: []const []const u8) void {
             const rc = net_state.addListenPolicyRule(.allow, split.pattern, split.port);
             if (rc != 0) {
                 io.werr("gengo: invalid --net-listen-allow value: ");
+                io.werr(v);
+                io.werr("\n");
+                die(1);
+            }
+            script_index += 2;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--net-dial-allow")) {
+            if (script_index + 1 >= argv.len) {
+                io.werr("gengo: --net-dial-allow requires a value pattern[:port]\n");
+                die(1);
+            }
+            const v = argv[script_index + 1];
+            const split = splitPatternPort(v);
+            const rc = net_state.addPolicyRule(.allow, split.pattern, split.port);
+            if (rc != 0) {
+                io.werr("gengo: invalid --net-dial-allow value: ");
                 io.werr(v);
                 io.werr("\n");
                 die(1);
