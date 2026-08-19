@@ -875,7 +875,7 @@ fn runCli(argv: []const []const u8) void {
             io.werr("gengo: cannot emit GBC: ");
             io.werr(@errorName(err));
             if (err == error.UnsupportedConstant) {
-                io.werr(" (this script uses a feature GBC caching doesn't support yet: enums, a predicate declared inside a function body (rather than at module/type scope), or a closure with real captures stored as a constant — see issue #5)");
+                io.werr(" (this script uses a feature GBC caching doesn't support yet: enums, task types, a predicate declared inside a function body (rather than at module/type scope), or a closure with real captures stored as a constant — see issue #5)");
             }
             io.werr("\n");
             die(1);
@@ -957,7 +957,7 @@ fn runCli(argv: []const []const u8) void {
             io.werr("gengo: cannot emit GBC module: ");
             io.werr(@errorName(err));
             if (err == error.UnsupportedConstant) {
-                io.werr(" (this script uses a feature GBC caching doesn't support yet: enums, a predicate declared inside a function body (rather than at module/type scope), or a closure with real captures stored as a constant — see issue #5)");
+                io.werr(" (this script uses a feature GBC caching doesn't support yet: enums, task types, a predicate declared inside a function body (rather than at module/type scope), or a closure with real captures stored as a constant — see issue #5)");
             }
             io.werr("\n");
             die(1);
@@ -1178,6 +1178,58 @@ fn testCaptureWrite(s: []const u8) void {
     const avail = @min(s.len, test_capture_buf.len - test_capture_len);
     @memcpy(test_capture_buf[test_capture_len..][0..avail], s[0..avail]);
     test_capture_len += avail;
+}
+
+// Coverage gap audit (2026-08-19): splitPatternPort backs both
+// --net-listen-allow and --net-dial-allow (added this session) and had
+// zero test coverage of its own — worth checking carefully since it was
+// never wired into any test step at all until this same audit (see
+// main_test in build.zig). Its own doc comment makes an explicit claim —
+// "a bare pattern with no port (e.g. ... unbracketed \"::1\") is never
+// misread as having one" — that turned out to be wrong on inspection:
+// lastIndexOfScalar finds the SECOND ':' in "::1" (index 1, not the
+// first), so raw[2..] = "1" parses as a valid port, and the function
+// returns pattern=":", port=1 — exactly the misread the comment claims
+// doesn't happen. Confirmed here, not just reasoned about, precisely
+// because past behavior in this codebase has been "verify empirically,
+// don't trust a comment's claim about its own code." This locks down the
+// ACTUAL current behavior (a real parsing footgun for any bare-IPv6
+// dial/listen pattern) rather than silently agreeing with a doc comment
+// that doesn't match the code — the fix (bracket-require unbracketed
+// multi-colon input) is a design decision for whoever picks this up, not
+// bundled into this audit pass.
+test "splitPatternPort matches its own doc comment for common cases" {
+    const noPort = splitPatternPort("*");
+    try std.testing.expectEqualStrings("*", noPort.pattern);
+    try std.testing.expectEqual(@as(u16, 0), noPort.port);
+
+    const wildcardHost = splitPatternPort("*.example.com");
+    try std.testing.expectEqualStrings("*.example.com", wildcardHost.pattern);
+    try std.testing.expectEqual(@as(u16, 0), wildcardHost.port);
+
+    const withPort = splitPatternPort("192.168.1.1:8080");
+    try std.testing.expectEqualStrings("192.168.1.1", withPort.pattern);
+    try std.testing.expectEqual(@as(u16, 8080), withPort.port);
+
+    const bracketedNoPort = splitPatternPort("[::1]");
+    try std.testing.expectEqualStrings("::1", bracketedNoPort.pattern);
+    try std.testing.expectEqual(@as(u16, 0), bracketedNoPort.port);
+
+    const bracketedWithPort = splitPatternPort("[::1]:8080");
+    try std.testing.expectEqualStrings("::1", bracketedWithPort.pattern);
+    try std.testing.expectEqual(@as(u16, 8080), bracketedWithPort.port);
+}
+
+// See the comment above: this pins down the ACTUAL (surprising) behavior
+// for unbracketed multi-colon input, which contradicts the function's own
+// doc comment. If this function is ever fixed to reject or correctly
+// parse unbracketed IPv6 patterns, this test's expected values — not its
+// intent — are what should change.
+test "splitPatternPort misparses unbracketed multi-colon input (documented footgun)" {
+    const bare_ipv6 = splitPatternPort("::1");
+    // NOT pattern="::1", port=0, despite the doc comment's claim.
+    try std.testing.expectEqualStrings(":", bare_ipv6.pattern);
+    try std.testing.expectEqual(@as(u16, 1), bare_ipv6.port);
 }
 
 test "runtime error block includes location and caret" {

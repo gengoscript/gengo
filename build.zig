@@ -353,6 +353,26 @@ pub fn build(b: *std.Build) void {
     const engine_api_test_step = b.step("engine-api-test", "Run native engine C API tests");
     engine_api_test_step.dependOn(&run_engine_api_tests.step);
 
+    // src/main.zig had its own `test` blocks (e.g. "runtime error block
+    // includes location and caret") but no addTest ever compiled/ran them —
+    // found dead while auditing for coverage gaps (2026-08-19): `zig build
+    // test`'s full output never mentions that test name anywhere. Wiring it
+    // in properly, matching engine_api_test_mod's shape (same
+    // build_options/runtime_config imports main.zig's own executables need).
+    const main_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    main_test_mod.addImport("build_options", native_cli_opts_mod);
+    main_test_mod.addImport("runtime_config", runtime_config_mod);
+    main_test_mod.link_libc = true;
+    const main_test = b.addTest(.{ .root_module = main_test_mod, .test_runner = standalone_runner });
+    const run_main_tests = b.addRunArtifact(main_test);
+
+    const main_test_step = b.step("main-test", "Run src/main.zig's own unit tests (CLI-internal helpers)");
+    main_test_step.dependOn(&run_main_tests.step);
+
     // ── Heap / GC unit tests (native Zig test runner) ─────────────────────────
     // Uses a wrapper root at src/ so that runtime/heap.zig can import ../lang/value.zig.
 
@@ -421,6 +441,7 @@ pub fn build(b: *std.Build) void {
     unit_step.dependOn(&run_engine_runner.step);
 
     const test_step = b.step("test", "Run heap, compiler, lexer, runtime safety, value, embedding, engine, fuzz, and conformance tests");
+    test_step.dependOn(&run_main_tests.step);
     test_step.dependOn(&run_heap_tests.step);
     test_step.dependOn(&run_compiler_tests.step);
     test_step.dependOn(&run_embedding_frag_tests.step);

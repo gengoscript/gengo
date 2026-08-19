@@ -4442,6 +4442,31 @@ test "gbc: writer rejects an enum-typed constant (out of scope for this incremen
     try std.testing.expectError(error.UnsupportedConstant, gbc_writer.write(rt.chunk_state, std.testing.allocator, .{ .root_source = "" }));
 }
 
+// Coverage gap audit (2026-08-19): task_type has no case in gbc_writer.zig's
+// constant-writing switch at all (unlike struct_type/named_type/
+// variant_type/interface_type, which each register into the TYPES section),
+// so it falls through to the same generic `else => UnsupportedConstant` an
+// enum does — but the CLI's --emit-gbc/--emit-gbc-module error message
+// (main.zig) only mentions enums, in-body predicates, and captured
+// closures as causes, never task types. Confirmed via the actual CLI
+// before writing this down: it fails loudly, not silently, but with an
+// incomplete explanation. Locks down the loud-failure half; the message
+// text itself doesn't have a test (it's not really testable — see
+// known-limitations.md's Tooling table, extended alongside this test).
+test "gbc: writer rejects a task-typed constant" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Worker task func(n int) {
+        \\    x := receive()
+        \\}
+        \\func f() {
+        \\    _ = Worker(1)
+        \\}
+    );
+    try std.testing.expectError(error.UnsupportedConstant, gbc_writer.write(rt.chunk_state, std.testing.allocator, .{ .root_source = "" }));
+}
+
 test "gbc: writer supports a captureless (module-scope) predicate-bearing named type" {
     var rt = try setup();
     defer rt.deinit();
