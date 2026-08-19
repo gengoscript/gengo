@@ -4,6 +4,31 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-08-19
 
+### GBC — enum type support (#5)
+
+`TYPE_KIND_ENUM` (wire value `0x03`) was reserved in `gbc-spec.md` §8.6
+from the start but never implemented — `enum_type` fell through
+`gbc_writer.zig`'s constant-writing switch to `UnsupportedConstant`, the
+same generic rejection an unsupported type gets. Implemented following
+`struct_t`/`variant_t`/`interface_t`'s existing `TypeEntryInfo`/
+`writeTypesSection` pattern: members (name list), `member_ints` (optional
+explicit representation values — absent means "use ordinal position"),
+and `parent_name` (enum subtypes, `subtype Weekend Days { Sat, Sun }` —
+a separate feature from named-type subtypes, sharing the same `""` == no
+parent wire convention `TYPE_KIND_NAMED` already uses). The resolved
+parent `*Object` pointer is left null on load and picked up lazily by
+`vm_types.zig`'s `resolveEnumParent` on first use, identical to a
+normally compiled enum subtype — no GBC-side cross-reference resolution
+needed. Verified via the actual CLI (`--emit-gbc` then running the
+artifact) before writing the regression test down: explicit
+representation values, auto-incremented ordinals, `.name`/`.int`/
+`from_int()`, and an enum subtype all produce byte-identical output to
+running the same source directly. `enums` removed from the
+`--emit-gbc`/`--emit-gbc-module` "unsupported feature" error message and
+`known-limitations.md`'s Tooling table; generic functions, task/actor
+types, in-body predicates with real captures, and closures with real
+captures remain unsupported.
+
 ### Security — `cap:net` dial policy now defaults to deny, not allow (#221)
 
 `checkDialPolicy` (`net_state.zig`) previously allowed any destination when

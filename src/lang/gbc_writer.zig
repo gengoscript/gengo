@@ -72,9 +72,7 @@ pub const CONST_TYPE_REF: u8 = 0x08;
 
 pub const TYPE_KIND_STRUCT: u8 = 0x01;
 pub const TYPE_KIND_NAMED: u8 = 0x02;
-// 0x03 (ENUM) is reserved by gbc-spec.md §8.6 for a not-yet-implemented type
-// kind — skipped here rather than reused, so adding it later doesn't
-// renumber INTERFACE/VARIANT.
+pub const TYPE_KIND_ENUM: u8 = 0x03;
 pub const TYPE_KIND_INTERFACE: u8 = 0x04;
 pub const TYPE_KIND_VARIANT: u8 = 0x05;
 
@@ -399,7 +397,7 @@ fn writeTypeSpecDepth(w: *ByteWriter, spec: value_mod.FieldTypeSpec, depth: u32)
     }
 }
 
-const TypeEntryKind = enum { struct_t, named_t, variant_t, interface_t };
+const TypeEntryKind = enum { struct_t, named_t, variant_t, interface_t, enum_t };
 
 const TypeEntryInfo = struct {
     kind: TypeEntryKind,
@@ -409,6 +407,7 @@ const TypeEntryInfo = struct {
     nt: ?*const value_mod.NamedTypeObj = null,
     vt: ?*const value_mod.VariantTypeObj = null,
     it: ?*const value_mod.InterfaceTypeObj = null,
+    et: ?*const value_mod.EnumTypeObj = null,
     // named_t only: index into SEC_FUNCTIONS for nt.predicate's underlying
     // FuncObj, resolved the same way a FUNC_REF constant is (see write()'s
     // .named_type case) — null if the named type has no predicate.
@@ -535,6 +534,26 @@ fn writeTypesSection(w: *ByteWriter, types: []const TypeEntryInfo) WriteError!vo
                 const it = te.it.?;
                 try w.u16_(@intCast(it.methods.len));
                 for (it.methods) |m| try writeInterfaceMethod(w, m);
+            },
+            .enum_t => {
+                try w.u8_(TYPE_KIND_ENUM);
+                try w.str_(te.name);
+                try w.str_(te.qualified_name);
+                const et = te.et.?;
+                try w.u16_(@intCast(et.members.len));
+                for (et.members) |m| try w.str_(m);
+                // member_ints: explicit representation values (member i's
+                // int is member_ints[i], not its ordinal position) — null
+                // means "use ordinal position", same convention
+                // compiler_decls.zig's enum parsing already uses.
+                try w.bool8(et.member_ints != null);
+                if (et.member_ints) |mints| {
+                    for (mints) |v| try w.i64_(v);
+                }
+                // parent_name: same "" == no parent convention named_t's
+                // parent_name already uses (enum subtypes — a separate
+                // feature from named-type subtypes, same wire shape).
+                try w.str_(et.parent_name orelse "");
             },
         }
     }
@@ -781,6 +800,16 @@ pub fn write(cs: *chunk.State, alloc: std.mem.Allocator, opts: WriteOptions) Wri
                             .name = it.name,
                             .qualified_name = it.qualified_name,
                             .it = it,
+                        });
+                        try consts_w.u8_(CONST_TYPE_REF);
+                        try consts_w.u32_(@intCast(types.items.len - 1));
+                    },
+                    .enum_type => |*et| {
+                        try types.append(alloc, .{
+                            .kind = .enum_t,
+                            .name = et.name,
+                            .qualified_name = et.qualified_name,
+                            .et = et,
                         });
                         try consts_w.u8_(CONST_TYPE_REF);
                         try consts_w.u32_(@intCast(types.items.len - 1));

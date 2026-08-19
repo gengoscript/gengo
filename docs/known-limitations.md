@@ -35,7 +35,6 @@ The relevant specifications include
 | Area | Current behaviour | Practical consequence |
 |---|---|---|
 | `--emit-gbc` and generic functions | `--emit-gbc` rejects any script that declares a generic function (`func f[T](...)`), even if it is never called. Generic struct and variant types alone round-trip correctly. | Avoid generic function declarations in scripts intended for GBC output; inline the monomorphic forms instead. |
-| `--emit-gbc` and enums | `--emit-gbc` rejects scripts that declare `enum` types. | Do not use enums in scripts intended for GBC output; use `variant` or named-int types instead. |
 | `--emit-gbc` and tasks | `--emit-gbc` rejects scripts that declare a `task func` type. There is no `TASK_T` case in the writer's constant-kind handling. | Do not use task/actor declarations in scripts intended for GBC output. |
 | `--emit-gbc` and in-body predicates | `--emit-gbc` rejects a predicate declared inside a function body when that predicate closes over the function's own locals. Module-scope predicates work. | Move the predicate to module or type scope. |
 | `--emit-gbc` source hash | The artifact records a hash of the source it was compiled from, but the CLI does not yet verify it before running the artifact. | Regenerate the `.gbc` whenever its `.gengo` source changes; do not rely on automatic invalidation. |

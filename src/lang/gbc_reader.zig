@@ -417,6 +417,11 @@ const RawTypeEntry = struct {
     predicate_msg: ?[]const u8 = null,
     has_default: bool = false,
     default_val: Value = .null,
+    // ENUM
+    members: [][]const u8 = &.{},
+    member_ints: ?[]i64 = null,
+    // parent_name is shared with NAMED above — same field, same "" == no
+    // parent convention.
 };
 
 fn readTypesSection(r: *ByteReader, cs: *chunk.State, hs: *heap.State, alloc: std.mem.Allocator) ReadError![]RawTypeEntry {
@@ -508,6 +513,22 @@ fn readTypesSection(r: *ByteReader, cs: *chunk.State, hs: *heap.State, alloc: st
                 var mi: u16 = 0;
                 while (mi < method_count) : (mi += 1) methods[mi] = try readInterfaceMethod(r, hs, alloc);
                 out[i] = .{ .kind = kind, .name = name, .qualified_name = qualified_name, .methods = methods };
+            },
+            gbc_writer.TYPE_KIND_ENUM => {
+                const member_count = try r.u16_();
+                const members = (hs.bump([]const u8, member_count) orelse return error.OutOfMemory)[0..member_count];
+                var emi: u16 = 0;
+                while (emi < member_count) : (emi += 1) members[emi] = try copyStr(hs, try r.str_());
+                const has_ints = try r.bool8();
+                var member_ints: ?[]i64 = null;
+                if (has_ints) {
+                    const mints = (hs.bump(i64, member_count) orelse return error.OutOfMemory)[0..member_count];
+                    var mii: u16 = 0;
+                    while (mii < member_count) : (mii += 1) mints[mii] = try r.i64_();
+                    member_ints = mints;
+                }
+                const parent_name = try copyStr(hs, try r.str_());
+                out[i] = .{ .kind = kind, .name = name, .qualified_name = qualified_name, .members = members, .member_ints = member_ints, .parent_name = parent_name };
             },
             else => return error.MalformedSection,
         }
@@ -977,6 +998,23 @@ fn loadSections(bytes: []const u8, cs: *chunk.State, hs: *heap.State, alloc: std
                             .qualified_name = rt.qualified_name,
                             .methods = rt.methods,
                         } };
+                    },
+                    gbc_writer.TYPE_KIND_ENUM => {
+                        obj.* = .{
+                            .enum_type = .{
+                                .name = rt.name,
+                                .qualified_name = rt.qualified_name,
+                                .members = rt.members,
+                                .member_ints = rt.member_ints,
+                                // Empty string means "no parent", same convention
+                                // as TYPE_KIND_NAMED above. parent (the resolved
+                                // *Object pointer) stays null — resolved lazily
+                                // on first use by vm_types.zig's
+                                // resolveEnumParent, identical to a normally
+                                // compiled enum subtype.
+                                .parent_name = if (rt.parent_name.len == 0) null else rt.parent_name,
+                            },
+                        };
                     },
                     else => return error.MalformedSection,
                 }

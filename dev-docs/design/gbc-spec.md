@@ -629,10 +629,14 @@ default_val    : f64 | str | bool8  // present only if has_default; shape depend
 
 **ENUM** (`0x03`) — after common fields:
 ```
-member_count : u16
-members      : [member_count]str
-parent_name  : str   // empty if not a subtype
+member_count    : u16
+members         : [member_count]str
+has_member_ints : bool8
+member_ints     : [member_count]i64   // present only if has_member_ints
+parent_name     : str                 // empty if not a subtype
 ```
+
+> **Found during implementation (#5):** this section originally specified only `members`/`parent_name`, omitting explicit representation values (`type Status enum { pending = 10, active = 20, done = 30 }`) entirely. Without them a loader has no choice but to fall back to ordinal position, silently producing the wrong `.int` value for any enum whose explicit values diverge from ordinals — verified by round-tripping exactly that case before this was added. `has_member_ints`/`member_ints` follow the same present-flag-then-payload convention `NAMED`'s own optional fields (`elem_spec`/`key_spec`/`val_spec`/predicate/default) already use in this same section. `member_ints[i]` corresponds to `members[i]`; absent means every member's representation value is its ordinal position, matching `compiler_decls.zig`'s own enum-parsing convention.
 
 **INTERFACE** (`0x04`) — after common fields:
 ```

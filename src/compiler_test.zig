@@ -4432,27 +4432,79 @@ test "gbc: writer supports struct-typed constants" {
     std.testing.allocator.free(bytes);
 }
 
-test "gbc: writer rejects an enum-typed constant (out of scope for this increment)" {
-    var rt = try setup();
-    defer rt.deinit();
-    try compile(&rt,
-        \\type Status enum { pending, active, done }
-        \\func f() Status { return Status.active }
-    );
-    try std.testing.expectError(error.UnsupportedConstant, gbc_writer.write(rt.chunk_state, std.testing.allocator, .{ .root_source = "" }));
+// Enum GBC support (2026-08-19): TYPE_KIND_ENUM (0x03) was reserved by
+// gbc-spec.md §8.6 from the start but never implemented — enum_type fell
+// through the constant-writing switch's allowlist to UnsupportedConstant,
+// same as this test used to assert. Implemented following struct_t/
+// variant_t/interface_t's existing TypeEntryInfo/writeTypesSection
+// pattern exactly: members (name list), member_ints (optional explicit
+// representation values — null means "use ordinal position", same
+// convention compiler_decls.zig's own enum parsing already uses), and
+// parent_name (enum subtypes — a separate feature from named-type
+// subtypes, sharing the same "" == no parent wire convention). parent
+// (the resolved *Object) is left null on load and picked up lazily by
+// vm_types.zig's resolveEnumParent, identical to a normally compiled
+// enum subtype — no special GBC-side cross-reference resolution needed.
+// Covers explicit representation values, auto-incremented ordinals,
+// .name/.int/from_int(), and an enum subtype (parent resolution).
+test "gbc: enum-type constants (explicit ints, auto-increment, subtype) round-trip through write+read and execute correctly" {
+    const src =
+        \\type Status enum { pending = 0, active = 1, done = 2 }
+        \\type Level enum { low, mid, high }
+        \\type Days enum { Mon, Tue, Wed, Thu, Fri, Sat, Sun }
+        \\subtype Weekend Days { Sat, Sun }
+        \\func f() string {
+        \\    s := Status.active
+        \\    d := Weekend.Sat
+        \\    return s.name + ":" + string(s.int) + ":" + string(Level.mid.int) + ":" + d.name + ":" + string(d.int) + ":" + Status.from_int(2).name
+        \\}
+    ;
+
+    var rt1 = try setup();
+    defer rt1.deinit();
+    try runSrc(&rt1, src);
+    const expected = try rt1.callGlobal("f", &.{});
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, src);
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = src });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    chunk.setActive(rt3.chunk_state);
+    globals.setActive(&rt3.globals_state);
+    heap.setActive(&rt3.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, src);
+    try fusion_pass.fuse(chunk.g_state, rt3.vm_state.allocator);
+
+    const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
+    try vm.run(ctx);
+    const actual = try vm.callGlobal(ctx, "f", &.{});
+
+    try std.testing.expectEqualStrings(try vms.asStringValue(expected), try vms.asStringValue(actual));
+    try std.testing.expectEqualStrings("active:1:1:Sat:5:done", try vms.asStringValue(actual));
 }
 
 // Coverage gap audit (2026-08-19): task_type has no case in gbc_writer.zig's
 // constant-writing switch at all (unlike struct_type/named_type/
-// variant_type/interface_type, which each register into the TYPES section),
-// so it falls through to the same generic `else => UnsupportedConstant` an
-// enum does — but the CLI's --emit-gbc/--emit-gbc-module error message
-// (main.zig) only mentions enums, in-body predicates, and captured
-// closures as causes, never task types. Confirmed via the actual CLI
-// before writing this down: it fails loudly, not silently, but with an
-// incomplete explanation. Locks down the loud-failure half; the message
-// text itself doesn't have a test (it's not really testable — see
-// known-limitations.md's Tooling table, extended alongside this test).
+// variant_type/interface_type/enum_type, which each register into the
+// TYPES section — enum_type joined that list later the same day), so it
+// falls through to the generic `else => UnsupportedConstant`. At the time
+// this was found, the CLI's --emit-gbc/--emit-gbc-module error message
+// (main.zig) only mentioned enums, in-body predicates, and captured
+// closures as causes, never task types — fixed alongside this test. Once
+// enum support landed later, "enums" was removed from that same message
+// (no longer a valid cause) without touching the task-type wording added
+// here. Confirmed via the actual CLI before writing this down: it fails
+// loudly, not silently, but with an incomplete explanation at the time.
+// Locks down the loud-failure half; the message text itself doesn't have
+// a test (it's not really testable — see known-limitations.md's Tooling
+// table, extended alongside this test).
 test "gbc: writer rejects a task-typed constant" {
     var rt = try setup();
     defer rt.deinit();
