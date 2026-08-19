@@ -655,6 +655,35 @@ fn testNetCapability() void {
     out("  net capability: OK\n");
 }
 
+// Coverage gap audit, pass 3 (2026-08-19): task_state.zig's claimSlot has a
+// comptime wasm32 guard (error.TasksNotYetSupportedOnWasm) — this file is
+// the only place that guard is even reachable by a test at all, and
+// nothing had ever exercised it. Spawning must fail with a clean,
+// catchable runtime error (not a crash, not silent corruption — the whole
+// point of the guard, per task_state.zig's own comment), not just compile.
+// No native/wasm32 comptime branch here unlike testInitFailure above:
+// engine_runner.zig is wasm32-only in this build graph (addWasmExe, never
+// natively compiled anywhere in build.zig — checked, not assumed), so a
+// native-target branch would be permanently dead code. Native task-spawn
+// success is already covered by compiler_test.zig's task tests.
+fn testTaskWasmRejection() void {
+    const rt = makeRt(.{ .allow_io = false });
+    const res = rt.run(
+        \\type Worker task func(n int, reply actor) {
+        \\    reply.send(n + 1)
+        \\}
+        \\_ = Worker(1, self())
+        \\result := receive()
+    );
+    switch (res) {
+        .runtime_error => |e| {
+            if (e.kind != error.TasksNotYetSupportedOnWasm) fail("engine FAIL: expected TasksNotYetSupportedOnWasm on WASM\n");
+        },
+        else => fail("engine FAIL: expected task spawn to be rejected on WASM\n"),
+    }
+    out("  task wasm rejection: OK\n");
+}
+
 const MockNetState = struct {
     dial_called: bool = false,
     read_called: bool = false,
@@ -1391,6 +1420,7 @@ export fn _start() void {
     testHostModuleArrayArgs();
     testGcStressWindows();
     testNetCapability();
+    testTaskWasmRejection();
     testNetCapabilityHandlers();
     testNetCapabilityHandlersCleanup();
     testInitWithConfig();
