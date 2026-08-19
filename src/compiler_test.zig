@@ -5601,6 +5601,74 @@ test "task: main permanently blocks (silently) if its sole replier panics before
     try std.testing.expectEqual(false, reached.boolean);
 }
 
+// Coverage gap audit, pass 3 (2026-08-19): task_state.zig follows the same
+// g_default_state + threadlocal g_state + setActive pattern as net_state/
+// fs_state/heap (its own header comment says so), and Runtime embeds a
+// task_state: tasks_mod.State field by value (runtime.zig:158), not a
+// pointer into shared memory — structurally the same isolation shape
+// net_state now has. But net_state only has that shape because of a real,
+// shipped, historical bug (#216, "net/http state not per-Runtime") found
+// AFTER the fact; task/actor was built to match that shape from the start,
+// but nothing had ever verified two live Runtimes' task schedulers don't
+// bleed into each other the same way engine_runner.zig's testMultiHandle
+// already does for plain globals. Two Runtimes alive at once, each
+// spawning a task with a different distinctive computation, interleaved
+// (rt2 created and fully run between rt1's spawn and rt1's second task
+// operation) specifically to catch any g_state redirection left pointing
+// at the wrong Runtime's task_state.
+test "task: two concurrent Runtimes' task schedulers don't bleed into each other" {
+    var rt1 = try setup();
+    defer rt1.deinit();
+    // Both spawn+receive sequences are top-level (self()/receive() are
+    // illegal inside an ordinary func — see the two tests above), so each
+    // is its own runSrc call against the same, already-used rt1 — matching
+    // how a real embedding host would run one script, then run another
+    // against the same live Runtime (the "repl incremental" pattern this
+    // codebase already relies on elsewhere).
+    try runSrc(&rt1,
+        \\var last1 = 0
+        \\type Adder1000 task func(n int, reply actor) {
+        \\    reply.send(n + 1000)
+        \\}
+        \\_ = Adder1000(1, self())
+        \\last1 = receive()
+        \\func getLast1() int { return last1 }
+    );
+    const first = try rt1.callGlobal("getLast1", &.{});
+    try std.testing.expectEqual(@as(i64, 1001), first.int);
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try runSrc(&rt2,
+        \\var last2 = 0
+        \\type Adder2000 task func(n int, reply actor) {
+        \\    reply.send(n + 2000)
+        \\}
+        \\_ = Adder2000(1, self())
+        \\last2 = receive()
+        \\func getLast2() int { return last2 }
+    );
+    const second = try rt2.callGlobal("getLast2", &.{});
+    try std.testing.expectEqual(@as(i64, 2001), second.int);
+
+    // Back to rt1: a second, independent top-level spawn+receive, after
+    // rt2's scheduler ran to completion in between. If g_state redirection
+    // ever left rt1 pointed at rt2's task_state (or vice versa), this
+    // either resolves the wrong task type/mailbox or panics instead of
+    // returning 1002.
+    try runSrc(&rt1,
+        \\var last1b = 0
+        \\type Adder1000b task func(n int, reply actor) {
+        \\    reply.send(n + 1000)
+        \\}
+        \\_ = Adder1000b(2, self())
+        \\last1b = receive()
+        \\func getLast1b() int { return last1b }
+    );
+    const third = try rt1.callGlobal("getLast1b", &.{});
+    try std.testing.expectEqual(@as(i64, 1002), third.int);
+}
+
 fn netListenClientWorker(port: u16, connected: *std.atomic.Value(bool), echoed: *std.atomic.Value(bool)) void {
     const sock = std.posix.system.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
     if (std.posix.errno(sock) != .SUCCESS) return;
