@@ -285,10 +285,20 @@ fn parseHeapSize(s: []const u8) usize {
 }
 
 // Splits a --net-listen-allow/--net-dial-allow value into (pattern, port). Bracketed form
-// ("[::1]:8080" or bare "[::]") is IPv6-safe; otherwise splits on the last
-// ':' only when the tail parses as a port number, so a bare pattern with no
-// port (e.g. "*.example.com" or unbracketed "::1") is never misread as
-// having one. port 0 means "any port", matching net_state's own rule shape.
+// ("[::1]:8080" or bare "[::]") is IPv6-safe; otherwise splits on ':' only
+// when there is EXACTLY ONE in the whole string — a bare (unbracketed)
+// multi-colon string is always a literal IPv6 address, never "pattern:port"
+// (that shape only ever has one colon, for IPv4/hostname/wildcard
+// patterns), so it's never split. Bracket an IPv6 pattern to combine it
+// with a port. port 0 means "any port", matching net_state's own rule
+// shape.
+//
+// Fixed 2026-08-19: this used to split on the LAST ':' whenever the tail
+// happened to parse as a valid port, which mis-split any unbracketed
+// multi-colon input where that was true by coincidence — "::1" (colons at
+// 0 and 1) became pattern=":", port=1, not pattern="::1", port=0 as the
+// (then-inaccurate) comment claimed. Found by writing tests for this
+// function, which had never had any before.
 fn splitPatternPort(raw: []const u8) struct { pattern: []const u8, port: u16 } {
     if (raw.len > 0 and raw[0] == '[') {
         if (std.mem.indexOfScalar(u8, raw, ']')) |rb| {
@@ -301,9 +311,11 @@ fn splitPatternPort(raw: []const u8) struct { pattern: []const u8, port: u16 } {
         }
     }
     if (std.mem.lastIndexOfScalar(u8, raw, ':')) |i| {
-        if (std.fmt.parseUnsigned(u16, raw[i + 1 ..], 10)) |port| {
-            return .{ .pattern = raw[0..i], .port = port };
-        } else |_| {}
+        if (std.mem.indexOfScalar(u8, raw, ':') == i) {
+            if (std.fmt.parseUnsigned(u16, raw[i + 1 ..], 10)) |port| {
+                return .{ .pattern = raw[0..i], .port = port };
+            } else |_| {}
+        }
     }
     return .{ .pattern = raw, .port = 0 };
 }
@@ -1184,20 +1196,13 @@ fn testCaptureWrite(s: []const u8) void {
 // --net-listen-allow and --net-dial-allow (added this session) and had
 // zero test coverage of its own — worth checking carefully since it was
 // never wired into any test step at all until this same audit (see
-// main_test in build.zig). Its own doc comment makes an explicit claim —
-// "a bare pattern with no port (e.g. ... unbracketed \"::1\") is never
-// misread as having one" — that turned out to be wrong on inspection:
-// lastIndexOfScalar finds the SECOND ':' in "::1" (index 1, not the
-// first), so raw[2..] = "1" parses as a valid port, and the function
-// returns pattern=":", port=1 — exactly the misread the comment claims
-// doesn't happen. Confirmed here, not just reasoned about, precisely
-// because past behavior in this codebase has been "verify empirically,
-// don't trust a comment's claim about its own code." This locks down the
-// ACTUAL current behavior (a real parsing footgun for any bare-IPv6
-// dial/listen pattern) rather than silently agreeing with a doc comment
-// that doesn't match the code — the fix (bracket-require unbracketed
-// multi-colon input) is a design decision for whoever picks this up, not
-// bundled into this audit pass.
+// main_test in build.zig). Writing tests for it surfaced a real bug,
+// since fixed: the old unbracketed-input path split on the LAST ':'
+// whenever the tail happened to parse as a port, which mis-split
+// "::1" (colons at index 0 and 1) into pattern=":", port=1 instead of
+// the intended pattern="::1", port=0. Now requires exactly one ':' in
+// the whole unbracketed string before treating it as pattern:port —
+// see the function's own comment for the fixed rule.
 test "splitPatternPort matches its own doc comment for common cases" {
     const noPort = splitPatternPort("*");
     try std.testing.expectEqualStrings("*", noPort.pattern);
@@ -1220,16 +1225,17 @@ test "splitPatternPort matches its own doc comment for common cases" {
     try std.testing.expectEqual(@as(u16, 8080), bracketedWithPort.port);
 }
 
-// See the comment above: this pins down the ACTUAL (surprising) behavior
-// for unbracketed multi-colon input, which contradicts the function's own
-// doc comment. If this function is ever fixed to reject or correctly
-// parse unbracketed IPv6 patterns, this test's expected values — not its
-// intent — are what should change.
-test "splitPatternPort misparses unbracketed multi-colon input (documented footgun)" {
+// Regression test for the fixed bug described above: unbracketed
+// multi-colon input must never be split, regardless of whether some
+// suffix after some colon happens to parse as a number.
+test "splitPatternPort never splits unbracketed multi-colon input" {
     const bare_ipv6 = splitPatternPort("::1");
-    // NOT pattern="::1", port=0, despite the doc comment's claim.
-    try std.testing.expectEqualStrings(":", bare_ipv6.pattern);
-    try std.testing.expectEqual(@as(u16, 1), bare_ipv6.port);
+    try std.testing.expectEqualStrings("::1", bare_ipv6.pattern);
+    try std.testing.expectEqual(@as(u16, 0), bare_ipv6.port);
+
+    const longer_ipv6 = splitPatternPort("2001:db8::8080");
+    try std.testing.expectEqualStrings("2001:db8::8080", longer_ipv6.pattern);
+    try std.testing.expectEqual(@as(u16, 0), longer_ipv6.port);
 }
 
 test "runtime error block includes location and caret" {
