@@ -40,9 +40,9 @@ jobs:
         run: |
           zig build -Dpreset=1m engine-native
           mkdir -p build
-          cc -std=c11 -Wall -Wextra -Iinclude tools/site-builder/fixtures/c_engine/add.c -Lzig-out/lib '-Wl,-rpath,$ORIGIN/../zig-out/lib' -lgengo-engine -o build/gengo-c-add
+          cc -std=c11 -Wall -Wextra -Isdk/c/include tools/site-builder/fixtures/c_engine/add.c -Lzig-out/lib '-Wl,-rpath,$ORIGIN/../zig-out/lib' -lgengo-engine -o build/gengo-c-add
           test "$(./build/gengo-c-add)" = "42"
-          cc -std=c11 -Wall -Wextra -Iinclude tools/site-builder/fixtures/c_engine/composite.c -Lzig-out/lib '-Wl,-rpath,$ORIGIN/../zig-out/lib' -lgengo-engine -o build/gengo-c-composite
+          cc -std=c11 -Wall -Wextra -Isdk/c/include tools/site-builder/fixtures/c_engine/composite.c -Lzig-out/lib '-Wl,-rpath,$ORIGIN/../zig-out/lib' -lgengo-engine -o build/gengo-c-composite
           test "$(./build/gengo-c-composite)" = "ok"
       - name: Verify generated site and quickstart fixture
         run: |

@@ -183,7 +183,7 @@ From the repository root on Linux, build the native engine and fixture:
 
 ```bash
 zig build -Dpreset=1m engine-native
-cc -std=c11 -Wall -Wextra -Iinclude tools/site-builder/fixtures/c_engine/add.c \
+cc -std=c11 -Wall -Wextra -Isdk/c/include tools/site-builder/fixtures/c_engine/add.c \
   -Lzig-out/lib -Wl,-rpath,'$ORIGIN/../zig-out/lib' -lgengo-engine -o build/gengo-c-add
 ./build/gengo-c-add
 ```
