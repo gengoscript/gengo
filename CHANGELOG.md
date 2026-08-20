@@ -4,6 +4,37 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-08-20
 
+### Fix — REPL: a string global (bare, or nested in an array/map) silently corrupted on the next line
+
+Found live in the REPL while trying the new `[]Type{...}` sugar:
+`x := []string{"asd"}` on one line, then `x` alone on the next, printed
+`[x]` instead of `[asd]` — the string element had turned into the
+*variable's own name*. Reproduced with a bare string too (`y := "asd"`
+then `y` prints `y`), proving it was a general, pre-existing REPL bug
+unrelated to the new sugar, just never noticed before.
+
+Root cause: `chunk.State.internStr`'s returned `*const StringSlice`
+points directly into `chunk_state.str_slices` — the *only* `Value`
+variant that references chunk-owned memory rather than either living
+inline in the `Value` union or as a heap object on the persistent GC
+heap. `Runtime.runIncremental` (the REPL's per-line compile entry point)
+calls `chunk_state.reset()` before every line, which unconditionally
+zeroes `str_slice_count` — so a global that survived from an earlier
+line, if it held a string value (directly, or nested in an array/map/
+struct), kept pointing at a chunk-state slot that the *next* line's
+compile was about to reuse for something else entirely (here, the
+lookup of the global's own name), silently swapping in whatever string
+that next line happened to intern first.
+
+Fixed by saving/restoring `str_slice_count` around `runIncremental`'s
+`chunk_state.reset()` call, so each line's newly-interned strings
+append after the previous lines' instead of overwriting them — every
+previously-persisted string pointer stays valid for the life of the
+REPL session. Scoped to `runIncremental` only; every other
+`chunk_state.reset()` caller runs a single, self-contained compile with
+nothing needing to survive past it, so their existing reset-to-zero
+behavior is unaffected and correct.
+
 ### Fix — `bigint - x` panicked through every fused subtraction opcode (fusion-specific divergence)
 
 Found while auditing bigint's GC-allocation lifecycle for a different bug

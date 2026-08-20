@@ -889,6 +889,57 @@ test "api runtime: incremental enum subtype validation matches file mode" {
     try std.testing.expectEqual(@as(u32, 1), repl_result.compile_error.line);
 }
 
+// Found via the REPL, not by review: `x := "asd"` on one line, then `x`
+// alone on the next, printed "x" (the SECOND line's own global-name
+// lookup) instead of "asd". Root cause: internStr's *const StringSlice
+// points directly into chunk_state.str_slices, the only Value variant that
+// references chunk-owned (not GC-heap) memory -- every other kind either
+// lives inline in the Value union or as an .object on the persistent GC
+// heap. runIncremental's chunk_state.reset() (once per REPL line)
+// unconditionally zeroed str_slice_count, so a persisted global's string
+// value became a dangling reference to whatever the NEXT line happened to
+// intern at that same slot. Reproduced here without any I/O capture
+// machinery: persist a string-holding global across two separate
+// runIncremental calls, then read it back through a THIRD incremental
+// compile (a function returning the global) rather than relying on the
+// REPL's bare-expression echo, so this only exercises the actual
+// Value-persistence bug, not the echo mechanism itself. Covers a bare
+// string global, and a string nested inside an array (the shape that
+// originally surfaced this while testing the []Type{...} composite-literal
+// sugar) and inside a map, since all three store the identical
+// Value{.string = ...} shape.
+test "repl: a string value (bare, in an array, in a map) survives across incremental compiles" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.runIncremental(
+        \\x := "asd"
+        \\arr := []string{"asd"}
+        \\m := {"k": "asd"}
+    ) == .ok);
+    try std.testing.expect(rt.runIncremental(
+        \\func getX() string { return x }
+        \\func getArr0() string { return arr[0] }
+        \\func getMK() string { return m["k"] }
+    ) == .ok);
+
+    switch (rt.call("getX", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("asd", try vms.asStringValue(v)),
+        .runtime_error => return error.TestUnexpectedResult,
+    }
+    switch (rt.call("getArr0", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("asd", try vms.asStringValue(v)),
+        .runtime_error => return error.TestUnexpectedResult,
+    }
+    switch (rt.call("getMK", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("asd", try vms.asStringValue(v)),
+        .runtime_error => return error.TestUnexpectedResult,
+    }
+}
+
 test "chunk: verify rejects jump target into instruction body" {
     var rt = try setup();
     defer rt.deinit();

@@ -834,7 +834,29 @@ pub const Runtime = struct {
         self.panic_depth = 0;
         self.activate();
         self.vm_state.setPolicy(self.policy);
+        // Preserve str_slices across the reset below (chunk.State.reset()
+        // unconditionally zeroes str_slice_count): internStr's *const
+        // StringSlice points directly into chunk_state.str_slices, the only
+        // Value variant that references chunk-owned (not GC-heap) memory —
+        // every other kind either lives inline in the Value union or as an
+        // .object on the persistent GC heap. A REPL global holding a plain
+        // string value (or any array/struct/map containing one) stores that
+        // same pointer, so once this line's reset repurposes str_slices[0..]
+        // for its own compile, the OLD global's string silently starts
+        // reading back whatever the NEW line happens to intern at that same
+        // slot — found via `x := "asd"` on one REPL line, then `x` alone on
+        // the next, printing "x" (the next line's own global-name lookup,
+        // which got interned first and landed at slot 0) instead of "asd".
+        // Saving/restoring the count around reset() makes new interning
+        // append after the old entries instead of overwriting them, keeping
+        // every previously-persisted string pointer valid — the array/const
+        // pool (chunk_state.consts) doesn't need the same treatment because
+        // nothing outside a single compile ever holds a raw index into it;
+        // globals are stored as full Value copies, not const-pool
+        // references, for every other Value variant.
+        const saved_str_slice_count = self.chunk_state.str_slice_count;
         self.chunk_state.reset();
+        self.chunk_state.str_slice_count = saved_str_slice_count;
         self.vm_state.resetExec();
 
         const repl_caps: []const module_compile.CapModuleDesc = if (self.enabled_capabilities.len > 0) module_compile.AllCapabilities else &[_]module_compile.CapModuleDesc{};
