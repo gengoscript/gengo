@@ -1192,6 +1192,30 @@ fn testCaptureWrite(s: []const u8) void {
     test_capture_len += avail;
 }
 
+// Coverage gap audit (2026-08-20): parseHeapSize backs --heap and had zero
+// test coverage — same "no e2e/CLI test harness at all" gap the audit found
+// for main.zig's flag parsing generally. Unlike splitPatternPort, this one
+// checked out clean: no bug found, but worth having a regression guard on
+// the suffix table and the "invalid input silently becomes 0" contract
+// (callers treat 0 as "use the default heap size", not a hard error).
+test "parseHeapSize parses k/m/g suffixes case-insensitively" {
+    try std.testing.expectEqual(@as(usize, 100), parseHeapSize("100"));
+    try std.testing.expectEqual(@as(usize, 4 * 1024), parseHeapSize("4k"));
+    try std.testing.expectEqual(@as(usize, 4 * 1024), parseHeapSize("4K"));
+    try std.testing.expectEqual(@as(usize, 16 * 1024 * 1024), parseHeapSize("16m"));
+    try std.testing.expectEqual(@as(usize, 16 * 1024 * 1024), parseHeapSize("16M"));
+    try std.testing.expectEqual(@as(usize, 1024 * 1024 * 1024), parseHeapSize("1g"));
+    try std.testing.expectEqual(@as(usize, 1024 * 1024 * 1024), parseHeapSize("1G"));
+}
+
+test "parseHeapSize returns 0 for empty, non-numeric, or suffix-only input" {
+    try std.testing.expectEqual(@as(usize, 0), parseHeapSize(""));
+    try std.testing.expectEqual(@as(usize, 0), parseHeapSize("abc"));
+    try std.testing.expectEqual(@as(usize, 0), parseHeapSize("k")); // no digits before the suffix
+    try std.testing.expectEqual(@as(usize, 0), parseHeapSize("-5m")); // parseUnsigned rejects the sign
+    try std.testing.expectEqual(@as(usize, 0), parseHeapSize("4mb")); // trailing garbage after the suffix
+}
+
 // Coverage gap audit (2026-08-19): splitPatternPort backs both
 // --net-listen-allow and --net-dial-allow (added this session) and had
 // zero test coverage of its own — worth checking carefully since it was
