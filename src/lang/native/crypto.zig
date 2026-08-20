@@ -453,7 +453,16 @@ fn argon2id(ctx: VMContext, argc: u8) !Value {
     const p = try vms.valueAsInt(ctx.vs.stack[ctx.vs.stack_top - 2]);
     const key_len = try vms.valueAsInt(ctx.vs.stack[ctx.vs.stack_top - 1]);
 
-    if (t < 1 or m < 8 or p < 1 or key_len < 1 or key_len > 64) return error.ValueError;
+    // Upper bounds (not just bcryptHash's lower-bound style) matter here:
+    // t/m/p are cast into std.crypto.pwhash.argon2.Params' u32/u32/u24
+    // fields below with @intCast, and an out-of-range i64 (e.g. m between
+    // u32::max and i64::max) panics that cast immediately -- a crash
+    // trivially reachable from Gengo source, no wire format or policy
+    // misconfiguration needed. The bounds also cap real resource use: m is
+    // in KiB, so 4 GiB and 100 iterations are already generous for any
+    // legitimate password-hashing use, while still comfortably fitting
+    // u32/u32/u24 (max ~4.29e9 / ~4.29e9 / ~1.68e7 respectively).
+    if (t < 1 or t > 100 or m < 8 or m > 4 * 1024 * 1024 or p < 1 or p > 255 or key_len < 1 or key_len > 64) return error.ValueError;
     if (salt.len < 8) return error.ValueError;
 
     // Copy inputs to stack buffers so GC allocation below is safe.

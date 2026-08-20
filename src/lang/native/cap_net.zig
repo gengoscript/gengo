@@ -27,7 +27,14 @@ fn extractHandle(arg: Value) !u32 {
             break :blk @intCast(n);
         },
         .float => |n| blk: {
-            if (n < 0 or n > @as(f64, @floatFromInt(std.math.maxInt(u32)))) return error.TypeError;
+            // !isFinite catches NaN too, not just checking bounds: NaN
+            // compares false against every ordinary comparison (IEEE 754),
+            // so a bare `n < 0 or n > MAX` guard silently passes NaN
+            // through to @intFromFloat below, which is safety-checked UB
+            // for a non-finite input — the same hazard floatToIntSafe
+            // (vm.zig) exists specifically to close, reimplemented here
+            // without that check.
+            if (!std.math.isFinite(n) or n < 0 or n > @as(f64, @floatFromInt(std.math.maxInt(u32)))) return error.TypeError;
             break :blk @as(u32, @intFromFloat(n));
         },
         else => return error.TypeError,
@@ -41,7 +48,7 @@ fn extractUsize(arg: Value) !usize {
             break :blk @as(usize, @intCast(n));
         },
         .float => |n| blk: {
-            if (n < 0 or n > @as(f64, @floatFromInt(std.math.maxInt(usize)))) return error.TypeError;
+            if (!std.math.isFinite(n) or n < 0 or n > @as(f64, @floatFromInt(std.math.maxInt(usize)))) return error.TypeError;
             break :blk @as(usize, @intFromFloat(n));
         },
         else => return error.TypeError,
@@ -52,7 +59,7 @@ fn extractI64(arg: Value) !i64 {
     return switch (arg) {
         .int => |n| n,
         .float => |n| blk: {
-            if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
+            if (!std.math.isFinite(n) or n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
             break :blk @as(i64, @intFromFloat(n));
         },
         else => return error.TypeError,

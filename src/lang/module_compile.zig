@@ -962,12 +962,17 @@ pub fn hasModuleExport(ctx: *anyopaque, path: []const u8, field: []const u8) boo
     const idx = self.findModule(path) orelse {
         // Check capability modules
         const cap_key = if (std.mem.startsWith(u8, path, "cap:")) path[4..] else path;
-        // cap:ffi additionally exports "types" (ffi.types.i32 etc.) and "buf"
-        // (ffi.buf(n)) that are not functions in cm.functions. They are
-        // installed at runtime by installFfiModule in native/main.zig.
+        // cap:ffi additionally exports "types" (ffi.types.i32 etc.), "buf"
+        // (ffi.buf(n)), and "buf_from_ptr" (ffi.buf_from_ptr(ptr, len)) that
+        // are not functions in cm.functions. They are installed at runtime
+        // by installFfiModule in native/main.zig. buf_from_ptr was missing
+        // from this allowlist -- its runtime dispatch (cap_ffi.zig) was
+        // fully implemented but permanently unreachable, since any script
+        // referencing ffi.buf_from_ptr failed to compile at all
+        // (UnknownField) before ever reaching it.
         if (comptime build_options.cap_ffi) {
             if (common.streq(cap_key, "ffi") and
-                (common.streq(field, "types") or common.streq(field, "buf"))) return true;
+                (common.streq(field, "types") or common.streq(field, "buf") or common.streq(field, "buf_from_ptr"))) return true;
         }
         for (self.capability_modules) |cm| {
             if (common.streq(cm.name, cap_key)) {

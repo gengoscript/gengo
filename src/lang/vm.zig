@@ -3298,7 +3298,16 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     ctx.vs.setRuntimeErr("division by zero", .{});
                     return error.DivisionByZero;
                 }
-                const result: i64 = if (an_int == std.math.minInt(i64) and bn_int == -1) std.math.minInt(i64) else @divTrunc(an_int, bn_int);
+                // This carrier path (named/decimal-wrapped int operands) used
+                // to silently return minInt(i64) here instead of erroring —
+                // a mathematically wrong answer (the true result is 2^63, one
+                // past i64's range), reintroducing the exact bug the plain
+                // int/int path above was already fixed for.
+                if (an_int == std.math.minInt(i64) and bn_int == -1) {
+                    ctx.vs.setRuntimeErr("integer overflow in division", .{});
+                    return error.RangeError;
+                }
+                const result: i64 = @divTrunc(an_int, bn_int);
                 try pushNumericResultWithCarrier(ctx, a, b, @floatFromInt(result), nop.tag, "div");
             },
             .rem => {
@@ -3344,7 +3353,11 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                         ctx.vs.setRuntimeErr("division by zero", .{});
                         return error.DivisionByZero;
                     }
-                    const result: i64 = @mod(a.int, b.int);
+                    // Same minInt(i64)/-1 overflow as .int_div/.rem just above
+                    // (2^63, one past maxInt) — @mod traps/UB's on it exactly
+                    // like @divTrunc/@rem do, and x mod ±1 is always 0
+                    // mathematically, matching .rem's guard for this case.
+                    const result: i64 = if (a.int == std.math.minInt(i64) and b.int == -1) 0 else @mod(a.int, b.int);
                     try ctx.vs.vmPush(.{ .int = result });
                     continue;
                 }
