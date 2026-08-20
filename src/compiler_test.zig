@@ -6337,8 +6337,16 @@ test "task: five concurrently-ready tasks reply in spawn (FIFO) order" {
 // interfaces are the cheapest declaration that still counts toward the
 // shared counter.
 test "compiler: declaring more than MaxTypes named types is rejected (TooManyTypes)" {
-    var rt = try setup();
+    var rt: Runtime = .{};
     defer rt.deinit();
+    // Explicit, generous heap/object budget instead of setup()'s ambient
+    // preset: -Dpreset=stress (a CI lane, see config_stress.zig) caps
+    // max_objects at 512, far below the 1025 type objects this test
+    // declares — under that preset the run hit OutOfMemory before ever
+    // reaching the TooManyTypes check this test targets. Found by the
+    // pre-push hook's -Dpreset=stress lane, which the earlier -Dpreset=1m
+    // verification never exercised.
+    try rt.initWithConfig(.{ .allow_io = false }, 4 * 1024 * 1024, 4096, vms.MaxStack, vms.MaxFrames, cfg.max_defers, std.testing.allocator);
     var src: std.ArrayListUnmanaged(u8) = .empty;
     defer src.deinit(std.testing.allocator);
     var i: u32 = 0;
