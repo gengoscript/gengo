@@ -593,6 +593,13 @@ pub fn buildDefusedCode(cs: *chunk.State, alloc: std.mem.Allocator) ![]u8 {
 
     // Pass 2: emit expanded instructions with corrected jump offsets.
     const out = try alloc.alloc(u8, new_len);
+    // decodeAt below (Pass 2) and remapConstFuncIps (Pass 3) can both still
+    // fail after this alloc succeeds -- without this, `out` (up to
+    // chunk.MaxCode) leaks on every such failure, reachable on every
+    // gbc_writer.write() call under memory pressure at these specific
+    // internal allocations. The function's own success path returns `out`
+    // itself (not freeing it), so this never fires there.
+    errdefer alloc.free(out);
     old_ip = 0;
     new_ip = 0;
     while (old_ip < old_len) {

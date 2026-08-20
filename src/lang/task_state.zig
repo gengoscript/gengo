@@ -129,11 +129,22 @@ pub const State = struct {
             // shape; skip it on wraparound so idFor() never mints a
             // TaskId indistinguishable from the null ref.
             if (slot.generation == 0) slot.generation = 1;
-            slot.status = .ready;
+            // status is set to .ready only AFTER vs is fully created and
+            // initialized (not before, as this used to do): a failure in
+            // create()/init() (realistically OutOfMemory) must leave the
+            // slot .empty and reclaimable by a later claimSlot call, not
+            // stuck .ready with vs == null -- that used to permanently
+            // remove the slot from the pool for the rest of the process's
+            // life (an .empty/.dead check is all that lets a slot be
+            // reused; .ready never matches either). Under sustained memory
+            // pressure with repeated spawn attempts, this could exhaust
+            // the task table and produce spurious TooManyTasks well before
+            // 64 *live* tasks exist.
             const vs = try self.allocator.create(vm_state.State);
             errdefer self.allocator.destroy(vs);
             vs.* = .{};
             try vs.init(vm_state.MaxStack, vm_state.MaxFrames, cfg.max_defers, 0, self.allocator);
+            slot.status = .ready;
             slot.vs = vs;
             slot.owns_vs = true;
             return .{ .idx = idx, .id = self.idFor(idx) };

@@ -132,6 +132,22 @@ pub const Runtime = struct {
         };
     }
 
+    // Returns Runtime BY VALUE, copied at least twice more after
+    // initWithConfig runs (into `rt` below, then again into the caller's
+    // own storage on return) — inner.activate()'s process-global pointers
+    // captured during initWithConfig are stale by the time this function
+    // returns, exactly the bug class fixed 2026-08-20 in
+    // compiler_test.zig's manually-driven VMContext tests (see
+    // Runtime.activate()'s doc comment). Calling activate() again here
+    // would not help — it would just be stale again after the next copy.
+    // This is safe ONLY because every current entry point that touches
+    // vm/tasks_mod/fs_state/net_state/http_state (run, runPath,
+    // runPathWithSources, runPathWithSourceProvider, call, runIncremental,
+    // begin/continueRun) transitively calls self.inner.reset() or
+    // self.inner.activate() on ITS OWN final, stable `self` before doing
+    // anything else. Any NEW api.Runtime method that touches that state
+    // MUST do the same as its first action — do not assume init()'s work
+    // survives the return.
     pub fn init(config: Config) !Runtime {
         var inner: rt_mod.Runtime = undefined;
         try inner.initWithConfig(
