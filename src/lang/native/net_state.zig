@@ -367,8 +367,17 @@ fn ipv6InCidr(ip: [16]u8, network: [16]u8, prefix_len: u8) bool {
     var remaining: u8 = prefix_len;
     for (0..16) |idx| {
         if (remaining == 0) break;
-        const bits: u3 = @intCast(@min(remaining, 8));
-        const mask: u8 = ~@as(u8, 0) << @intCast(8 - @as(u4, bits));
+        // Found via a coverage-audit test: @min(remaining, 8) legitimately
+        // equals 8 for any full byte of prefix (i.e. almost every
+        // real-world prefix_len, since most are byte-aligned or exceed 8
+        // in an early byte) — u3's max representable value is 7, so this
+        // panicked (Debug/ReleaseSafe) or hit @intCast's undefined
+        // behavior (ReleaseFast, what the shipped CLI actually runs) on
+        // virtually every ipv6_cidr policy rule. u4 covers the real 1..8
+        // range; the shift amount below already up-casts to u4 first, so
+        // this was a pure type-sizing bug, not a logic bug.
+        const bits: u4 = @intCast(@min(remaining, 8));
+        const mask: u8 = ~@as(u8, 0) << @intCast(8 - bits);
         if ((ip[idx] & mask) != (network[idx] & mask)) return false;
         remaining -= bits;
     }
@@ -1276,4 +1285,98 @@ pub fn netSetWriteDeadline(id: u32, ms: i64) !void {
     if (comptime builtin.os.tag == .windows) return error.CapabilityError; // TODO: Winsock SO_SNDTIMEO DWORD
     const conn = findConn(id) orelse return error.CapabilityError;
     try posixSetSockOptTimeval(conn.socket, @intCast(std.posix.SO.SNDTIMEO), ms);
+}
+
+// ---------------------------------------------------------------------------
+// Policy matching tests
+// ---------------------------------------------------------------------------
+//
+// A coverage audit found matchPolicy's CIDR matching, wildcard-suffix
+// matching, and the deliberate any-interface anti-bypass guard (see its own
+// comment above) had zero test coverage anywhere in the codebase — every
+// existing cap:net test only exercised the basic allow/deny toggle. These
+// operate on a local PolicyState directly (not g_state), so they need no
+// process-global setup/teardown and can't interfere with any other test.
+
+const testing = std.testing;
+
+test "net policy: ipv4 CIDR matches within the subnet and rejects outside it" {
+    var policy: PolicyState = .{};
+    try testing.expectEqual(@as(i32, 0), addRuleTo(&policy, .allow, "10.0.0.0/24", 0));
+    try testing.expect(matchPolicy(&policy, "10.0.0.1:80", false));
+    try testing.expect(matchPolicy(&policy, "10.0.0.255:80", false));
+    try testing.expect(!matchPolicy(&policy, "10.0.1.0:80", false)); // one past the /24 boundary
+    try testing.expect(!matchPolicy(&policy, "10.1.0.1:80", false));
+}
+
+test "net policy: ipv4 CIDR /32 behaves as an exact-host match" {
+    var policy: PolicyState = .{};
+    try testing.expectEqual(@as(i32, 0), addRuleTo(&policy, .allow, "192.168.1.5/32", 0));
+    try testing.expect(matchPolicy(&policy, "192.168.1.5:80", false));
+    try testing.expect(!matchPolicy(&policy, "192.168.1.6:80", false));
+}
+
+test "net policy: ipv4 CIDR /0 matches every address" {
+    var policy: PolicyState = .{};
+    try testing.expectEqual(@as(i32, 0), addRuleTo(&policy, .allow, "0.0.0.0/0", 0));
+    try testing.expect(matchPolicy(&policy, "1.2.3.4:80", false));
+    try testing.expect(matchPolicy(&policy, "255.255.255.255:80", false));
+}
+
+test "net policy: ipv6 CIDR matches within the subnet and rejects outside it" {
+    var policy: PolicyState = .{};
+    try testing.expectEqual(@as(i32, 0), addRuleTo(&policy, .allow, "2001:db8::/32", 0));
+    try testing.expect(matchPolicy(&policy, "[2001:db8::1]:80", false));
+    try testing.expect(matchPolicy(&policy, "[2001:db8:ffff::1]:80", false));
+    try testing.expect(!matchPolicy(&policy, "[2001:db9::1]:80", false));
+}
+
+test "net policy: ipv6 CIDR /128 behaves as an exact-host match" {
+    var policy: PolicyState = .{};
+    try testing.expectEqual(@as(i32, 0), addRuleTo(&policy, .allow, "::1/128", 0));
+    try testing.expect(matchPolicy(&policy, "[::1]:80", false));
+    try testing.expect(!matchPolicy(&policy, "[::2]:80", false));
+}
+
+test "net policy: wildcard suffix matches subdomains but not a lookalike bare domain" {
+    var policy: PolicyState = .{};
+    try testing.expectEqual(@as(i32, 0), addRuleTo(&policy, .allow, "*.example.com", 0));
+    try testing.expect(matchPolicy(&policy, "api.example.com:443", false));
+    try testing.expect(matchPolicy(&policy, "deep.sub.example.com:443", false));
+    // Must not match a domain that merely ends with the same letters but has
+    // no separating dot — "evilexample.com" is not a subdomain of
+    // "example.com". The rule stores the suffix WITH its leading "." (see
+    // buildPolicyRule) precisely to guard against this; a naive
+    // endsWith(host, "example.com") check would wrongly allow it.
+    try testing.expect(!matchPolicy(&policy, "evilexample.com:443", false));
+    try testing.expect(!matchPolicy(&policy, "example.com:443", false)); // bare domain, not a subdomain
+}
+
+test "net policy: a deny rule on 0.0.0.0 blocks binding the empty (any-interface) host" {
+    var policy: PolicyState = .{};
+    try testing.expectEqual(@as(i32, 0), addRuleTo(&policy, .deny, "0.0.0.0", 0));
+    // ":8080" (no host) is POSIX's any-interface bind — must not silently
+    // bypass a deny rule authored against its canonical "0.0.0.0" spelling.
+    try testing.expect(!matchPolicy(&policy, ":8080", true));
+}
+
+test "net policy: a deny rule on :: blocks binding the empty (any-interface) host" {
+    var policy: PolicyState = .{};
+    try testing.expectEqual(@as(i32, 0), addRuleTo(&policy, .deny, "::", 0));
+    try testing.expect(!matchPolicy(&policy, ":8080", true));
+}
+
+test "net policy: a deny-all CIDR on the empty host also can't be bypassed" {
+    var policy: PolicyState = .{};
+    try testing.expectEqual(@as(i32, 0), addRuleTo(&policy, .deny, "0.0.0.0/0", 0));
+    try testing.expect(!matchPolicy(&policy, ":8080", true));
+}
+
+test "net policy: rules are evaluated LIFO — the most recently added rule wins" {
+    var policy: PolicyState = .{};
+    try testing.expectEqual(@as(i32, 0), addRuleTo(&policy, .deny, "10.0.0.0/8", 0));
+    try testing.expect(!matchPolicy(&policy, "10.1.2.3:80", true));
+    try testing.expectEqual(@as(i32, 0), addRuleTo(&policy, .allow, "10.1.2.3", 0));
+    // The narrower, later allow rule overrides the earlier broad deny.
+    try testing.expect(matchPolicy(&policy, "10.1.2.3:80", true));
 }
