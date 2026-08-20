@@ -4,6 +4,27 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-08-20
 
+### Fix — `bigint - x` panicked through every fused subtraction opcode (fusion-specific divergence)
+
+Found while auditing bigint's GC-allocation lifecycle for a different bug
+class (which turned out clean): `bigint(x) + 5` worked but `bigint(x) - 5`
+panicked with a confusing `TypeError: cannot apply '-' to bigint and int`
+in ordinary (fused) execution, while `--no-fusion` gave the correct answer
+— a genuine silent-miscompilation-shaped bug, the fusion pass changing
+program behavior. Root cause: `computeAddResult` (the `.add` opcode's
+non-int fallback, shared by every fused add opcode) has an explicit
+bigint check before falling through to generic numeric handling;
+`pushSubResult`, its structurally identical sibling for `.sub`, never
+got the same check. The plain, unfused `.sub` opcode handler happens to
+pre-check bigint itself before ever calling `pushSubResult`, which
+masked the gap there entirely — it only broke through the *fused*
+subtraction opcodes (`const_sub`, `get_local_const_sub`,
+`get_local_const_sub_call[_tail]`, `call_global_local_sub_const[_tail]`,
+`get_global_const_sub`), all seven of which call `pushSubResult` directly
+with no such pre-check. Fixed by adding the same bigint check to
+`pushSubResult` itself, closing the gap at all 8 call sites at once
+rather than patching each fused opcode individually.
+
 ### Language — `[]Type{elem, ...}` typed composite-literal sugar for arrays
 
 Go-style typed array literal syntax, e.g. `xs := []int{1, 2, 3}`. Desugars

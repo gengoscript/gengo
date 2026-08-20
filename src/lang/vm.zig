@@ -480,6 +480,23 @@ fn pushSubResult(ctx: VMContext, a: Value, b: Value) !void {
         try ctx.vs.vmPush(r);
         return;
     }
+    // computeAddResult (this function's sibling, called the same way from
+    // every fused add opcode's non-int fallback) checks bigint here; this
+    // one didn't. The plain, unfused `.sub` opcode handler happens to
+    // pre-check bigint itself before ever calling pushSubResult, masking
+    // the gap there — but all 7 fused subtraction opcodes (const_sub,
+    // get_local_const_sub, get_local_const_sub_call[_tail],
+    // call_global_local_sub_const[_tail], get_global_const_sub) call this
+    // function directly with no such pre-check, so `bigint - anything`
+    // (or `anything - bigint`) panicked with a confusing TypeError instead
+    // of computing correctly, on every one of those fused forms. Found via
+    // `bigint(x) - 5` failing while `bigint(x) + 5` worked, then confirmed
+    // fusion-specific via `--no-fusion` (which routes through the correctly-
+    // guarded plain `.sub` handler and returns the right answer).
+    if (vmbigint.isBigInt(a) or vmbigint.isBigInt(b)) {
+        try ctx.vs.vmPush(try bigIntBinOpWithPromotion(ctx, a, b, .sub));
+        return;
+    }
     const an = try valueAsNumberForOp(ctx, a, b, "-");
     const bn = try valueAsNumberForOp(ctx, b, a, "-");
     const tag = numericOpTag(a, b) catch |err| {

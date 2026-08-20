@@ -6680,6 +6680,31 @@ test "compiler: mod does not trap/overflow for i64::MIN mod -1" {
     try std.testing.expectEqual(@as(i64, 0), result.int);
 }
 
+// computeAddResult (the .add opcode's non-int fallback, shared by every
+// fused add opcode) has an explicit bigint check; its sibling pushSubResult
+// (the same role for .sub) didn't — found via `bigint(x) - 5` panicking with
+// a confusing TypeError while `bigint(x) + 5` worked. The plain, unfused
+// `.sub` opcode handler happens to pre-check bigint itself before ever
+// calling pushSubResult, masking the gap there entirely — this only broke
+// through the FUSED subtraction opcodes (const_sub, get_local_const_sub,
+// get_local_const_sub_call[_tail], call_global_local_sub_const[_tail],
+// get_global_const_sub), all of which call pushSubResult directly with no
+// such pre-check. `local - const` (as opposed to a `func g(a, b)` runtime
+// call, which never fuses this way) specifically exercises
+// get_local_const_sub — confirmed via --disasm before writing this test.
+test "compiler: bigint - const survives fusion (get_local_const_sub)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() string {
+        \\    a := bigint("1000000000000000000000")
+        \\    return string(a - 3)
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqualStrings("999999999999999999997", try vms.asStringValue(result));
+}
+
 // std.json.stringify used to serialize any bigint as `null` (falling through
 // the object-tag switch's generic else branch), silently discarding the
 // value entirely. std.conv.to_int/to_float rejected bigint with TypeError
