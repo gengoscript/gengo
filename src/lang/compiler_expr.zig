@@ -56,6 +56,46 @@ pub fn arrayLit(c: anytype) !void {
     try c.cs.emit2(@intFromEnum(Op.build_array), count, c.prev.line);
 }
 
+// Entry point for parsePrecedence's `.lbracket` prefix arm — pulled out into
+// its own function (not inlined into that switch arm directly) so its 4
+// saved-position locals live in THIS function's stack frame, not
+// parsePrecedence's. parsePrecedence recurses on every nested expression
+// (e.g. unary minus chains), and in an unoptimized/Debug build each of its
+// local variables — regardless of which switch arm actually uses them —
+// contributes to every single recursive frame's size; found via a
+// pre-existing "expression too deep" test that verifies MaxExprDepth's
+// software counter rejects deep nesting before the native stack actually
+// overflows, which started hitting the real stack limit first once these
+// locals were briefly inlined there instead.
+//
+// Disambiguates `[]Type{...}` (the typed composite-literal sugar) from a
+// plain array literal `[elem, ...]` or an empty `[]`. '[' is already
+// consumed (it's c.prev); c.cur is ']' only for either shape, and whether a
+// real type spec (then '{') follows can only be known by actually trying to
+// parse one — Gengo is newline-insensitive, so `xs := []` immediately
+// followed by an unrelated NEW statement (starting with an identifier,
+// `func`, another `[`, anything) is completely ordinary code, not a broken
+// program, and token-type lookahead alone can't tell that apart from
+// genuine `[]Type{...}` sugar in general. tryTypedArrayLit only commits
+// (emits bytecode) once '{' is actually confirmed; on any other outcome it
+// consumes nothing beyond the ']' the caller already confirmed, so a plain
+// position save/restore is sufficient to cleanly fall back to ordinary
+// array-literal parsing.
+fn arrayLitOrTypedArrayLit(c: anytype) !void {
+    if (c.check(.rbracket)) {
+        const saved_cur = c.cur;
+        const saved_prev = c.prev;
+        const saved_peek = c.peek_tok;
+        const saved_lex = c.lex;
+        if (try c.tryTypedArrayLit()) return;
+        c.cur = saved_cur;
+        c.prev = saved_prev;
+        c.peek_tok = saved_peek;
+        c.lex = saved_lex;
+    }
+    try arrayLit(c);
+}
+
 // Returns true for an identifier token that names a concrete, comparable
 // type — usable opposite a '.type' expression. Interfaces are excluded
 // ('.type' never equals an interface name, since interfaces aren't concrete
@@ -893,7 +933,7 @@ pub fn parsePrecedence(c: anytype, p: Prec) anyerror!void {
         },
         .lbracket => {
             c.clearCurrentExprPrimInfo();
-            try arrayLit(
+            try arrayLitOrTypedArrayLit(
                 c,
             );
         },

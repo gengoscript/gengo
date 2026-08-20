@@ -595,6 +595,16 @@ nums := [1, 2, 3]
 std.io.println(nums[0])
 ```
 
+An array literal can also be prefixed with an explicit element type — Go-
+style composite-literal syntax — equivalent to (and desugars to exactly the
+same construction as) `var xs []Type = [elem, ...]`:
+
+```gengo
+xs := []int{1, 2, 3}
+pts := []Point{Point{x: 1, y: 2}, Point{x: 3, y: 4}}
+empty := []int{}
+```
+
 Maps:
 
 ```gengo

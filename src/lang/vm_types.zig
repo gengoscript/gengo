@@ -157,9 +157,25 @@ pub fn matchesTypeAlt(ctx: VMContext, v: Value, alt: *const FieldTypeAlt) bool {
         .error_t => v == .error_value or (v == .object and v.object.* == .named_error_value),
         .actor_ref_t => v == .actor_ref,
         .array => blk: {
-            if (!(v == .object and vms.isArrayObject(v.object))) break :blk false;
+            // Unwrap a named-array value first: `var xs []int = [...]` (and
+            // the `[]int{...}` composite-literal sugar) both construct their
+            // result via constructNamedType's .array_t case, which always
+            // wraps the plain array in a .named_value carrying the
+            // (possibly anonymous) array named_type — the elements were
+            // already validated once at construction time, but the wrapper
+            // itself is opaque to isArrayObject. Without this, passing such
+            // a value to a plain `[]T`-typed function parameter always
+            // failed with a confusingly identical-looking "expected []T,
+            // got []T" (both sides render the same runtime type name, since
+            // the type IS []T — the check just never looked inside the
+            // wrapper). Checking elements structurally against the
+            // unwrapped array is correct regardless of what named-type
+            // wrapper (if any) produced it, matching how []T parameters
+            // are meant to accept any array with T-typed elements.
+            const av = v.namedInner() orelse v;
+            if (!(av == .object and vms.isArrayObject(av.object))) break :blk false;
             if (alt.elem_spec) |es| {
-                const items = vms.asArraySlice(v.object) catch unreachable;
+                const items = vms.asArraySlice(av.object) catch unreachable;
                 for (items) |item| {
                     if (!matchesTypeSpec(ctx, item, es)) break :blk false;
                 }
@@ -167,9 +183,13 @@ pub fn matchesTypeAlt(ctx: VMContext, v: Value, alt: *const FieldTypeAlt) bool {
             break :blk true;
         },
         .map => blk: {
-            if (!(v == .object and vms.isMapObject(v.object))) break :blk false;
+            // Same named_value-unwrapping fix as .array above, and for the
+            // same reason: `var m [K]V = {...}` also wraps via
+            // constructNamedType's .map_t case.
+            const mv = v.namedInner() orelse v;
+            if (!(mv == .object and vms.isMapObject(mv.object))) break :blk false;
             if (alt.key_spec) |ks| {
-                const entries = vms.asMapSlice(v.object) catch unreachable;
+                const entries = vms.asMapSlice(mv.object) catch unreachable;
                 for (entries) |e| {
                     if (!matchesTypeSpec(ctx, e.key, ks)) break :blk false;
                     if (alt.val_spec) |vs| {

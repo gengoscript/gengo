@@ -2186,6 +2186,73 @@ fn fieldTypeAltLabel(hs: *heap.State, alt: FieldTypeAlt) []const u8 {
     };
 }
 
+// Sugar for `[]Type{elem, elem, ...}` as a standalone expression (Go-style
+// composite literal) — e.g. `xs := []int{1, 2, 3}`. Desugars to exactly the
+// same construction `var xs []int = [1, 2, 3]` already compiles to below
+// (an anonymous array named_type built once, its object pushed as a
+// constant, the plain array value constructed and passed to it as a
+// single-arg call) — reusing that machinery rather than duplicating its
+// element-type checking/coercion rules a second time.
+//
+// Entered only from parsePrecedence's `.lbracket` prefix arm, which has
+// already consumed the leading '[' (it's in c.prev) and confirmed c.cur is
+// ']' — that's it; whether a real type spec (and then '{') follows can only
+// be known by actually trying to parse one, since Gengo is newline-
+// insensitive and a plain `[]` is a complete expression on its own (e.g.
+// `xs := []` immediately followed by an unrelated new statement that
+// happens to start with `func`/an identifier/another `[` is completely
+// ordinary code, not a broken program).
+//
+// Returns false (having consumed NOTHING beyond confirming c.cur is ']')
+// when this isn't actually the sugar shape — parseFieldTypeSpec errored, or
+// no '{' follows the parsed type — so the caller can roll back to exactly
+// where it started and fall back to treating '[]' as a plain empty array.
+// Every side effect below this point (heap bumps for the FieldTypeSpec
+// tree, c.setErr from a failed speculative parse) is either harmless to
+// discard (compile-time-only scratch data) or gets overwritten by whatever
+// real error the fallback path produces — see this function's caller for
+// the actual state save/restore. Nothing is emitted to c.cs (bytecode)
+// until AFTER the '{' is confirmed, so there is never anything to unwind
+// on the chunk side.
+pub fn tryTypedArrayLit(c: anytype) !bool {
+    const open_line = c.prev.line;
+    c.advance(); // consume ']' of the leading '[]' (caller already confirmed it)
+    const elem = c.parseFieldTypeSpec() catch return false;
+    if (c.cur.typ != .lbrace) return false;
+    const ep = c.hs.bump(FieldTypeSpec, 1) orelse return error.OutOfMemory;
+    ep[0] = elem;
+    const array_alt: FieldTypeAlt = .{ .typ = .array, .elem_spec = ep[0] };
+    const type_label = fieldTypeAltLabel(c.hs, array_alt);
+    const nt = c.hs.allocObject() orelse return error.OutOfMemory;
+    nt.* = .{ .named_type = .{
+        .name = type_label,
+        .qualified_name = type_label,
+        .base = .array_t,
+        .is_anonymous = true,
+        .elem_spec = ep[0],
+    } };
+    try c.cs.emitConst(.{ .object = nt }, open_line);
+
+    c.advance(); // consume '{' (caller already confirmed it via c.cur.typ == .lbrace)
+    var count: u8 = 0;
+    if (!c.check(.rbrace)) {
+        while (true) {
+            try c.expr();
+            if (count == 255) {
+                c.setErr("too many elements (max {d})", .{MaxLocals});
+                return error.TooManyElements;
+            }
+            count += 1;
+            if (!c.match(.comma)) break;
+            if (c.check(.rbrace)) break;
+        }
+    }
+    try c.consume(.rbrace);
+    try c.cs.emit2(@intFromEnum(Op.build_array), count, c.prev.line);
+    try c.cs.emitCall(1, open_line);
+    return true;
+}
+
 pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
     if (has_keyword and c.cur.typ != .ident) return c.err("expected identifier, found {s}", .{c.tokenName(c.cur.typ)});
     const name = c.cur;

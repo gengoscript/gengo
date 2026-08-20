@@ -6649,11 +6649,58 @@ test "compiler: int_div raises RangeError (not a silently wrong answer) for i64:
     try std.testing.expectError(error.RangeError, rt.callGlobal("g", &.{ .{ .int = std.math.minInt(i64) }, .{ .int = -1 } }));
 }
 
+// A copy-paste-divergence audit found .int_div's OTHER path -- reached when
+// either operand is a named-type-wrapped int, via numericBinaryOp/
+// pushNumericResultWithCarrier rather than the plain int/int fast path
+// above -- had silently reintroduced the exact bug the fast path was
+// already fixed for: it returned minInt(i64) unmodified instead of raising
+// RangeError.
+test "compiler: int_div's named-type carrier path also raises RangeError for i64::MIN div -1" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Big int
+        \\func g() int { return int(Big(-9223372036854775808) div Big(-1)) }
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("g", &.{}));
+}
+
+// The same copy-paste-divergence audit found .mod's plain int/int path
+// (unlike its two siblings .int_div and .rem, just above) never checked
+// for this case at all -- @mod(minInt(i64), -1) traps/UB's on the same 2^63
+// overflow, since floored and truncating division coincide when dividing
+// by exactly -1. x mod 1 is always mathematically 0.
+test "compiler: mod does not trap/overflow for i64::MIN mod -1" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func g(a int, b int) int { return a mod b }
+    );
+    const result = try rt.callGlobal("g", &.{ .{ .int = std.math.minInt(i64) }, .{ .int = -1 } });
+    try std.testing.expectEqual(@as(i64, 0), result.int);
+}
+
 // std.json.stringify used to serialize any bigint as `null` (falling through
 // the object-tag switch's generic else branch), silently discarding the
 // value entirely. std.conv.to_int/to_float rejected bigint with TypeError
 // even though the direct-dispatched `int(...)`/`float(...)` builtins already
 // supported it — an inconsistency between two paths meant to be equivalent.
+// A capability-module audit found argon2id validated only t/m/p's LOWER
+// bounds (unlike bcryptHash's cost, which is bounded both ways) before
+// @intCast-ing them into std.crypto.pwhash.argon2.Params' u32/u32/u24
+// fields -- an out-of-range value (e.g. m between u32::max and i64::max)
+// panicked that cast immediately, a crash trivially reachable from Gengo
+// source with no wire format or policy misconfiguration needed.
+test "compiler: std.crypto.argon2id rejects an out-of-range m instead of panicking the @intCast" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func g() string { return std.crypto.argon2id("password", "somesalt1", 1, 999999999999, 1, 32) }
+    );
+    try std.testing.expectError(error.ValueError, rt.callGlobal("g", &.{}));
+}
+
 test "compiler: std.json.stringify serializes bigint as digits, not null; std.conv accepts bigint" {
     var rt = try setup();
     defer rt.deinit();
@@ -6696,6 +6743,125 @@ test "compiler: array/map element write re-enforces the named element type's pre
     try std.testing.expectError(error.PredicateFailed, rt.callGlobal("mapWrite", &.{}));
     const ok = try rt.callGlobal("arrWriteOk", &.{});
     try std.testing.expectEqual(@as(i64, 30), ok.int);
+}
+
+// Go-style typed composite-literal sugar for arrays: `[]Type{elem, ...}` as
+// a standalone expression. Desugars to the exact same construction
+// `var xs []Type = [elem, ...]` already compiles to (compiler_stmts.zig's
+// varDecl: an anonymous array named_type built once, its object pushed as
+// a constant, the plain array value constructed and passed to it as a
+// single-arg call) — verified here across primitive, struct, named-type,
+// empty, and nested element types, plus that element-type checking still
+// fires (an ill-typed element must still be rejected, not silently
+// accepted just because it went through the new sugar path).
+test "compiler: []Type{...} composite-literal sugar constructs a typed array" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Point struct { x int, y int }
+        \\type Meters int
+        \\func ints() []int { return []int{1, 2, 3} }
+        \\func strs() []string { return []string{"a", "b", "c"} }
+        \\func emptyInts() []int { return []int{} }
+        \\func points() []Point { return []Point{Point{x: 1, y: 2}, Point{x: 3, y: 4}} }
+        \\func meters() []Meters { return []Meters{Meters(1), Meters(2)} }
+        \\func nested() [][]int { return [][]int{[]int{1, 2}, []int{3, 4}} }
+        \\func typeName() string { return std.core.type_of([]int{1, 2}) }
+    );
+    // A `[]T`-declared function return (like a `[]T`-declared local or
+    // param) is a named_value wrapping the plain array — unwrap before
+    // inspecting, same as the matchesTypeAlt fix this test also exercises.
+    const arraySlice = struct {
+        fn get(v: Value) ![]Value {
+            const inner = v.namedInner() orelse v;
+            return vms.asArraySlice(inner.object);
+        }
+    }.get;
+
+    const ints = try rt.callGlobal("ints", &.{});
+    const ints_items = try arraySlice(ints);
+    try std.testing.expectEqual(@as(usize, 3), ints_items.len);
+    try std.testing.expectEqual(@as(i64, 1), ints_items[0].int);
+
+    const strs = try rt.callGlobal("strs", &.{});
+    try std.testing.expectEqual(@as(usize, 3), (try arraySlice(strs)).len);
+
+    const empty = try rt.callGlobal("emptyInts", &.{});
+    try std.testing.expectEqual(@as(usize, 0), (try arraySlice(empty)).len);
+
+    const points = try rt.callGlobal("points", &.{});
+    try std.testing.expectEqual(@as(usize, 2), (try arraySlice(points)).len);
+
+    const meters = try rt.callGlobal("meters", &.{});
+    try std.testing.expectEqual(@as(usize, 2), (try arraySlice(meters)).len);
+
+    // A copy-paste-divergence audit found matchesTypeAlt's .array/.map
+    // cases never unwrapped a named_value before checking isArrayObject —
+    // this is exactly the shape `[][]int{...}` produces for each inner
+    // element (a named-array-typed value nested inside another array
+    // literal), so this specific assertion is the regression guard for
+    // that fix, not just the sugar's own construction.
+    const nested = try rt.callGlobal("nested", &.{});
+    const nested_items = try arraySlice(nested);
+    try std.testing.expectEqual(@as(usize, 2), nested_items.len);
+    try std.testing.expectEqual(@as(i64, 1), (try arraySlice(nested_items[0]))[0].int);
+
+    const tn = try rt.callGlobal("typeName", &.{});
+    try std.testing.expectEqualStrings("array", try vms.asStringValue(tn));
+
+    try std.testing.expectError(error.TypeError, runSrc(&rt, "bad := []int{1, \"two\", 3}"));
+}
+
+// Gengo is newline-insensitive, so a naive "identifier right after ']'
+// means a type name follows" check misfires on completely ordinary code:
+// `xs := []` (a complete statement, empty untyped array) directly followed
+// by an unrelated NEW statement that happens to start with an identifier
+// (`std.io.println(xs)`) used to be swallowed as if it were
+// `[]std...{...}`. The fix requires that identifier to actually be a known
+// type name (isKnownTypeName) before treating it as the sugar.
+test "compiler: []Type{...} sugar doesn't misfire on a plain [] followed by an unrelated statement" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\empty := []
+        \\func describe() string { return std.core.type_of(empty) }
+    );
+    const result = try rt.callGlobal("describe", &.{});
+    try std.testing.expectEqualStrings("array", try vms.asStringValue(result));
+}
+
+// The same matchesTypeAlt fix as the nested-array assertion above, but
+// isolated to its actual trigger: a []T-typed function parameter receiving
+// an already []T-typed argument. Before the fix this failed with a
+// confusingly identical-looking "expected []int, got []int" (both sides
+// render the same runtime type name — the check just never looked past the
+// named_value wrapper constructNamedType's .array_t case always produces).
+// Reproduced via the plain `var` declaration form too, proving this was a
+// pre-existing bug in typed-array declarations generally, not something
+// the new []Type{} sugar introduced.
+test "compiler: a []T-typed value passes a []T-typed function parameter (named_value unwrapping)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func sum(xs []int) int {
+        \\    total := 0
+        \\    for v in xs {
+        \\        total += v
+        \\    }
+        \\    return total
+        \\}
+        \\func viaSugar() int { return sum([]int{10, 20, 30}) }
+        \\func viaVarDecl() int {
+        \\    var ys []int = [1, 2, 3]
+        \\    return sum(ys)
+        \\}
+    );
+    const a = try rt.callGlobal("viaSugar", &.{});
+    try std.testing.expectEqual(@as(i64, 60), a.int);
+    const b = try rt.callGlobal("viaVarDecl", &.{});
+    try std.testing.expectEqual(@as(i64, 6), b.int);
 }
 
 // Every other arithmetic-carrier path (add/sub/mul, unary neg, abs) re-checks

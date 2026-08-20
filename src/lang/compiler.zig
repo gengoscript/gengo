@@ -2740,6 +2740,7 @@ pub const Compiler = struct {
     const structInstanceLitAfterValue = compiler_expr.structInstanceLitAfterValue;
     const subtypeDecl = compiler_decls.subtypeDecl;
     const switchStmt = compiler_stmts.switchStmt;
+    pub const tryTypedArrayLit = compiler_stmts.tryTypedArrayLit;
     pub const typeNameLiteral = compiler_expr.typeNameLiteral;
     const unaryExpr = compiler_expr.unaryExpr;
     const varDecl = compiler_stmts.varDecl;

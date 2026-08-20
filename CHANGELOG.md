@@ -4,6 +4,46 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-08-20
 
+### Language — `[]Type{elem, ...}` typed composite-literal sugar for arrays
+
+Go-style typed array literal syntax, e.g. `xs := []int{1, 2, 3}`. Desugars
+to exactly the same construction `var xs []int = [1, 2, 3]` already
+compiled to (an anonymous array named_type built once, its object pushed
+as a constant, the plain array value passed to it as a single-arg call) —
+reusing that machinery rather than a second implementation of element-type
+checking. Supports primitive, struct, named-type, empty, and nested
+(`[][]int{...}`) element types.
+
+Disambiguating this from a plain `[elem, ...]` array literal or an empty
+`[]` is genuinely ambiguous by simple token lookahead: Gengo is newline-
+insensitive, so `xs := []` immediately followed by an unrelated new
+statement (`func foo() {...}`, `std.io.println(...)`, another `[...]`)
+is completely ordinary code that happens to start with a type-spec-like
+token. Resolved with real speculative parsing + rollback (save the 4
+parser-position fields, attempt to parse a type spec followed by `{`,
+restore and fall back to the plain literal if that fails) rather than
+token-type heuristics, which correctly handles every case rather than
+just the common ones.
+
+Two more bugs found and fixed along the way (both pre-existing, not
+introduced by this sugar — reproduced with the equivalent `var` syntax
+too):
+- `matchesTypeAlt`'s `.array`/`.map` cases never unwrapped a `.named_value`
+  before checking `isArrayObject`/`isMapObject` — passing an already-`[]T`-
+  typed value to a `[]T`-typed function parameter always failed with a
+  confusingly identical-looking "expected []T, got []T" (both sides render
+  the same runtime type name; the check just never looked inside the
+  wrapper `constructNamedType`'s `.array_t`/`.map_t` cases always produce).
+  This is also why `[][]int{...}` (or `var [][]int = [...]`) previously
+  failed: each inner element is itself a named-array-typed value.
+- The disambiguation logic's first draft (token-type lookahead) increased
+  `parsePrecedence`'s per-call stack frame size (4 new locals, unconditionally
+  present regardless of which switch arm executes, in an unoptimized/Debug
+  build) enough to trip a pre-existing "expression too deep" stack-overflow
+  guard test before its own software depth counter could fire. Fixed by
+  extracting the whole disambiguation into its own function so those locals
+  don't live in the recursive function's frame.
+
 ### Fix — cap:net IPv6 CIDR policy rules crashed (or hit UB in release builds) for virtually every real prefix length
 
 A coverage audit found `net_state.zig`'s `ipv6InCidr` had zero test
