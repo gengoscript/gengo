@@ -1,5 +1,5 @@
-001_compute_stress 10.98
-003_fib_recursive 146.01
-005_fib_recursive_35_stress 1568.10
-006_call_overhead 958.81
-007_dispatch_loop 2634.52
+001_compute_stress 8.86
+003_fib_recursive 95.47
+005_fib_recursive_35_stress 1024.45
+006_call_overhead 516.40
+007_dispatch_loop 2209.56
