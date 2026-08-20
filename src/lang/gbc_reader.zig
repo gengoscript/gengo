@@ -433,6 +433,11 @@ fn readTypesSection(r: *ByteReader, cs: *chunk.State, hs: *heap.State, alloc: st
     const count = try r.u32_();
     if (count > 65536) return error.TooManyTypes;
     const out = try alloc.alloc(RawTypeEntry, count);
+    // Same leak class as parseHeaderAndSections' `sections` — a crafted
+    // entry (bad kind byte, truncated field) can error out of the loop
+    // below after this alloc already succeeded; the caller's own defer
+    // only covers the case where this function returns successfully.
+    errdefer alloc.free(out);
     var i: u32 = 0;
     while (i < count) : (i += 1) {
         const kind = try r.u8_();
@@ -590,6 +595,9 @@ pub fn readExportsSection(bytes: []const u8, alloc: std.mem.Allocator) ReadError
     const count = try r.u32_();
     if (count > ct.MaxModuleExports) return error.TooManyExports;
     const out = try alloc.alloc(RawExportEntry, count);
+    // Same leak class as readTypesSection above — a crafted entry can error
+    // out of the loop below after this alloc already succeeded.
+    errdefer alloc.free(out);
     var i: u32 = 0;
     while (i < count) : (i += 1) {
         const name = try r.str_();
@@ -606,6 +614,12 @@ fn readFunctionsSection(r: *ByteReader, hs: *heap.State, alloc: std.mem.Allocato
     const count = try r.u32_();
     if (count > 65536) return error.TooManyFunctions;
     const out = try alloc.alloc(RawFuncEntry, count);
+    // Same leak class as readTypesSection above — a crafted entry (e.g.
+    // named_return_count > 64) can error out of the loop below after this
+    // alloc already succeeded. (The named_return_count test below predates
+    // this fix and works around the leak with its own arena — still
+    // correct, just no longer load-bearing.)
+    errdefer alloc.free(out);
     var i: u32 = 0;
     while (i < count) : (i += 1) {
         const name_constant_idx = try r.u32_();
@@ -758,6 +772,13 @@ fn parseHeaderAndSections(bytes: []const u8, alloc: std.mem.Allocator, expected_
     const section_count = try br.u32_();
     if (section_count > 64) return error.MalformedSectionTable;
     var sections = try alloc.alloc(SectionEntry, section_count);
+    // A crafted section table can fail any of the reads/checks below after
+    // this alloc already succeeded (truncated entry, or a SectionOutOfBounds
+    // offset/length) — without this, `sections` leaks on every such input,
+    // a real resource-exhaustion vector for a host that repeatedly loads
+    // untrusted .gbc files. The success path returns `sections` itself (not
+    // freeing it), so this never fires there.
+    errdefer alloc.free(sections);
     var i: u32 = 0;
     while (i < section_count) : (i += 1) {
         const id = try br.u32_();
@@ -1299,4 +1320,126 @@ test "gbc: readFunctionsSection rejects named_return_count > 64" {
     };
     var r = ByteReader{ .bytes = &bytes };
     try testing.expectError(error.MalformedSection, readFunctionsSection(&r, &h, arena.allocator()));
+}
+
+// The remaining tests below close a real gap: every structural-validation
+// error variant in ReadError (as opposed to the header/checksum/staleness
+// ones already covered by compiler_test.zig's corrupted-magic/checksum/
+// stale-source tests) previously had zero coverage anywhere — nothing ever
+// fed the reader bytes that pass the checksum but are structurally invalid.
+// These call the section decoders directly with hand-crafted bytes (the
+// same pattern as the named_return_count test above), which is far cheaper
+// than round-tripping through gbc_writer.write() and patching+rechecksumming
+// a real artifact — most of these checks fire before any cross-section
+// bookkeeping (cs/hs) is even touched.
+
+fn testChunk(allocator: std.mem.Allocator) !chunk.State {
+    var cs: chunk.State = .{};
+    try cs.initArrays(allocator);
+    return cs;
+}
+
+test "gbc: readTypesSection rejects a type count above 65536 (TooManyTypes)" {
+    var h = try testHeap();
+    defer h.deinit();
+    var cs = try testChunk(testing.allocator);
+    defer cs.deinitArrays(testing.allocator);
+    // count = 65537 (u32 LE) — rejected before a single entry is decoded,
+    // so no further bytes are needed.
+    const bytes = [_]u8{ 0x01, 0x00, 0x01, 0x00 };
+    var r = ByteReader{ .bytes = &bytes };
+    try testing.expectError(error.TooManyTypes, readTypesSection(&r, &cs, &h, testing.allocator));
+}
+
+test "gbc: readTypesSection rejects an unknown type-entry kind byte" {
+    var h = try testHeap();
+    defer h.deinit();
+    var cs = try testChunk(testing.allocator);
+    defer cs.deinitArrays(testing.allocator);
+    const bytes = [_]u8{
+        // count = 1 (u32 LE)
+        0x01, 0x00, 0x00, 0x00,
+        // kind = 0xFF — not one of TYPE_KIND_STRUCT/NAMED/ENUM/INTERFACE/VARIANT/TASK
+        0xFF,
+        // name: len = 0
+        0x00, 0x00, 0x00,
+        0x00,
+        // qualified_name: len = 0
+        0x00, 0x00, 0x00,
+        0x00,
+    };
+    var r = ByteReader{ .bytes = &bytes };
+    // Arena: the count=1 RawTypeEntry slice allocates successfully before
+    // the error fires mid-loop, and would otherwise trip testing.allocator's
+    // leak detection — same reasoning as the named_return_count test above.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    try testing.expectError(error.MalformedSection, readTypesSection(&r, &cs, &h, arena.allocator()));
+}
+
+test "gbc: readFunctionsSection rejects a function count above 65536 (TooManyFunctions)" {
+    var h = try testHeap();
+    defer h.deinit();
+    // count = 65537 (u32 LE) — rejected before a single entry is decoded.
+    const bytes = [_]u8{ 0x01, 0x00, 0x01, 0x00 };
+    var r = ByteReader{ .bytes = &bytes };
+    try testing.expectError(error.TooManyFunctions, readFunctionsSection(&r, &h, testing.allocator));
+}
+
+test "gbc: readExportsSection rejects an export count above MaxModuleExports (TooManyExports)" {
+    const bytes = [_]u8{
+        // module_id: len = 0
+        0x00, 0x00, 0x00, 0x00,
+        // count = 257 (u32 LE) — one past ct.MaxModuleExports (256)
+        0x01, 0x01, 0x00, 0x00,
+    };
+    try testing.expectError(error.TooManyExports, readExportsSection(&bytes, testing.allocator));
+}
+
+test "gbc: readExportsSection rejects an unknown export type_kind byte" {
+    const bytes = [_]u8{
+        // module_id: len = 0
+        0x00, 0x00, 0x00, 0x00,
+        // count = 1
+        0x01, 0x00, 0x00, 0x00,
+        // name: len = 0
+        0x00, 0x00, 0x00, 0x00,
+        // qualified_name: len = 0
+        0x00, 0x00, 0x00, 0x00,
+        // type_kind = 0xFF — past ct.ExportTypeKind.variant_t (4)
+        0xFF,
+    };
+    // Arena: same leak-avoidance reasoning as the type-entry-kind test above
+    // — the count=1 RawExportEntry slice allocates before the error fires.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    try testing.expectError(error.MalformedSection, readExportsSection(&bytes, arena.allocator()));
+}
+
+test "gbc: readExportsSection rejects an unknown OptConstValue tag" {
+    const bytes = [_]u8{
+        // module_id: len = 0
+        0x00, 0x00, 0x00, 0x00,
+        // count = 1
+        0x01, 0x00, 0x00, 0x00,
+        // name: len = 0
+        0x00, 0x00, 0x00, 0x00,
+        // qualified_name: len = 0
+        0x00, 0x00, 0x00, 0x00,
+        // type_kind = 0 (func_or_var, valid)
+        0x00,
+        // const_value tag = 0xFF — not one of none/number/string/boolean (0x00-0x03)
+        0xFF,
+    };
+    // Arena: same leak-avoidance reasoning as above.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    try testing.expectError(error.MalformedSection, readExportsSection(&bytes, arena.allocator()));
+}
+
+test "gbc: readTypeSpec rejects an unknown field-type tag" {
+    var h = try testHeap();
+    defer h.deinit();
+    var r = ByteReader{ .bytes = &.{ 1, 0xFF } };
+    try testing.expectError(error.BadFieldTypeTag, readTypeSpec(&r, &h, testing.allocator));
 }
