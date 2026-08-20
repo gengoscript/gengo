@@ -32,6 +32,31 @@ fn setup() !Runtime {
     return rt;
 }
 
+// Fixed bug (2026-08-20), found by a coverage-audit test: every test below
+// that manually builds a vm.VMContext and calls vm.run()/vm.callGlobal()
+// directly (bypassing Runtime.run()/runFromGbc(), needed here to drive
+// gbc_reader.read() before there's a compiled program the normal entry
+// points could run) used to re-pin only 3 of Runtime.activate()'s 8
+// setActive calls — chunk/globals/heap — by hand, omitting vm/tasks_mod/
+// fs_state/net_state/http_state. Runtime.activate()'s own doc comment
+// explains why this matters: setup() returns Runtime BY VALUE, and Zig
+// does not guarantee that copy is elided, so every pointer captured
+// during initWithConfig (before the return) can go stale the moment the
+// caller's `var rt3 = try setup();` copy lands at a different address.
+// chunk_state survived because it's a *pointer* field (heap-allocated
+// separately, stable across the move); globals_state/heap_state were
+// already being manually re-pinned; tasks_mod (and the other omitted
+// globals) were not. This went undetected because ordinary Runtime.run()-
+// based tests self-heal (every real entry point calls activate() on its
+// own, already-stable `self`) — only this file's ~28 manually-driven
+// VMContext tests were exposed, and only when something (here,
+// vmAllocObject under -Dgc_stress=true, a CI-only lane the pre-push hook
+// never runs) actually dereferenced the stale global mid-test: vm_gc.zig's
+// collectGarbage walked tasks_mod.g_state's task table, read
+// 0xAA-poisoned freed memory as an out-of-range temp_root_top, and
+// panicked. Fixed by calling `rt3.activate()` instead of the manual
+// triplet everywhere below — it does strictly more, correctly.
+
 fn compile(rt: *Runtime, src: []const u8) !void {
     chunk.setActive(rt.chunk_state);
     globals.setActive(&rt.globals_state);
@@ -4366,9 +4391,7 @@ test "gbc: writer + reader round-trip produces identical execution results" {
 
     var rt3 = try setup();
     defer rt3.deinit();
-    chunk.setActive(rt3.chunk_state);
-    globals.setActive(&rt3.globals_state);
-    heap.setActive(&rt3.heap_state);
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
     chunk.reset();
     globals.reset();
     heap.reset();
@@ -4404,9 +4427,7 @@ test "gbc: a whole-valued float constant round-trips as .float, not .int" {
 
     var rt3 = try setup();
     defer rt3.deinit();
-    chunk.setActive(rt3.chunk_state);
-    globals.setActive(&rt3.globals_state);
-    heap.setActive(&rt3.heap_state);
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
     chunk.reset();
     globals.reset();
     heap.reset();
@@ -4473,9 +4494,7 @@ test "gbc: enum-type constants (explicit ints, auto-increment, subtype) round-tr
 
     var rt3 = try setup();
     defer rt3.deinit();
-    chunk.setActive(rt3.chunk_state);
-    globals.setActive(&rt3.globals_state);
-    heap.setActive(&rt3.heap_state);
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
     chunk.reset();
     globals.reset();
     heap.reset();
@@ -4614,9 +4633,7 @@ test "gbc: struct and named-type constants round-trip through write+read and exe
 
     var rt3 = try setup();
     defer rt3.deinit();
-    chunk.setActive(rt3.chunk_state);
-    globals.setActive(&rt3.globals_state);
-    heap.setActive(&rt3.heap_state);
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
     chunk.reset();
     globals.reset();
     heap.reset();
@@ -4666,9 +4683,7 @@ test "gbc: a func_t parameter round-trips through write+read and executes correc
 
     var rt3 = try setup();
     defer rt3.deinit();
-    chunk.setActive(rt3.chunk_state);
-    globals.setActive(&rt3.globals_state);
-    heap.setActive(&rt3.heap_state);
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
     chunk.reset();
     globals.reset();
     heap.reset();
@@ -4837,9 +4852,7 @@ test "gbc: variant-type constants (shared fields, record arm, single-payload arm
 
     var rt3 = try setup();
     defer rt3.deinit();
-    chunk.setActive(rt3.chunk_state);
-    globals.setActive(&rt3.globals_state);
-    heap.setActive(&rt3.heap_state);
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
     chunk.reset();
     globals.reset();
     heap.reset();
@@ -4881,9 +4894,7 @@ test "gbc: a predicate-bearing named type still enforces its predicate after rou
 
     var rt3 = try setup();
     defer rt3.deinit();
-    chunk.setActive(rt3.chunk_state);
-    globals.setActive(&rt3.globals_state);
-    heap.setActive(&rt3.heap_state);
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
     chunk.reset();
     globals.reset();
     heap.reset();
@@ -4944,9 +4955,7 @@ test "gbc: an in-function predicate with real captures round-trips, re-capturing
 
     var rt3 = try setup();
     defer rt3.deinit();
-    chunk.setActive(rt3.chunk_state);
-    globals.setActive(&rt3.globals_state);
-    heap.setActive(&rt3.heap_state);
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
     chunk.reset();
     globals.reset();
     heap.reset();
@@ -5076,9 +5085,7 @@ test "gbc: interface-type constants round-trip and assert_interface still enforc
 
     var rt3 = try setup();
     defer rt3.deinit();
-    chunk.setActive(rt3.chunk_state);
-    globals.setActive(&rt3.globals_state);
-    heap.setActive(&rt3.heap_state);
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
     chunk.reset();
     globals.reset();
     heap.reset();
@@ -5128,9 +5135,7 @@ test "gbc: a named type's default value and is_anonymous/scale round-trip correc
 
     var rt3 = try setup();
     defer rt3.deinit();
-    chunk.setActive(rt3.chunk_state);
-    globals.setActive(&rt3.globals_state);
-    heap.setActive(&rt3.heap_state);
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
     chunk.reset();
     globals.reset();
     heap.reset();
@@ -5159,9 +5164,7 @@ test "gbc: reader rejects a corrupted magic" {
 
     var rt3 = try setup();
     defer rt3.deinit();
-    chunk.setActive(rt3.chunk_state);
-    globals.setActive(&rt3.globals_state);
-    heap.setActive(&rt3.heap_state);
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
     chunk.reset();
     globals.reset();
     heap.reset();
@@ -5182,9 +5185,7 @@ test "gbc: reader rejects a corrupted body checksum" {
 
     var rt3 = try setup();
     defer rt3.deinit();
-    chunk.setActive(rt3.chunk_state);
-    globals.setActive(&rt3.globals_state);
-    heap.setActive(&rt3.heap_state);
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
     chunk.reset();
     globals.reset();
     heap.reset();
@@ -5200,9 +5201,7 @@ test "gbc: reader rejects a .gbc whose source has changed since it was compiled"
 
     var rt3 = try setup();
     defer rt3.deinit();
-    chunk.setActive(rt3.chunk_state);
-    globals.setActive(&rt3.globals_state);
-    heap.setActive(&rt3.heap_state);
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
     chunk.reset();
     globals.reset();
     heap.reset();
@@ -5221,13 +5220,365 @@ test "gbc: reader accepts a .gbc when the expected source still matches" {
 
     var rt3 = try setup();
     defer rt3.deinit();
-    chunk.setActive(rt3.chunk_state);
-    globals.setActive(&rt3.globals_state);
-    heap.setActive(&rt3.heap_state);
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
     chunk.reset();
     globals.reset();
     heap.reset();
     try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, "func f() int { return 1 }");
+}
+
+// The tests below close a real gap found by a coverage audit: gbc_reader.zig
+// defines ~20 structural ReadError variants (guarding a crafted/corrupted
+// .gbc file's section table, constant tags, and field-type tags) and none
+// of them were ever exercised — the only existing corruption tests above
+// flip a byte and hit BodyChecksumMismatch before any structural parsing
+// even runs. These recompute a valid checksum after each targeted mutation
+// so the reader actually reaches the check under test.
+
+// Locates one section's table entry and payload within a valid artifact's
+// body, by walking the section table exactly as gbc_reader.
+// parseHeaderAndSections does (gbc-spec.md §7): body starts with a u32
+// section_count, then section_count entries of id(u32)+flags(u32)+
+// offset(u64)+length(u64), 24 bytes each.
+const GbcSection = struct { table_pos: usize, payload_offset: usize, payload_len: usize };
+
+fn findGbcSection(bytes: []const u8, section_id: u32) GbcSection {
+    const body_start = 8 + gbc_writer.HEADER_SIZE;
+    const section_count = std.mem.readInt(u32, bytes[body_start..][0..4], .little);
+    var pos = body_start + 4;
+    var i: u32 = 0;
+    while (i < section_count) : (i += 1) {
+        const id = std.mem.readInt(u32, bytes[pos..][0..4], .little);
+        const offset = std.mem.readInt(u64, bytes[pos + 8 ..][0..8], .little);
+        const length = std.mem.readInt(u64, bytes[pos + 16 ..][0..8], .little);
+        if (id == section_id) return .{ .table_pos = pos, .payload_offset = body_start + @as(usize, @intCast(offset)), .payload_len = @intCast(length) };
+        pos += 24;
+    }
+    unreachable;
+}
+
+// Recomputes the whole-body XxHash64 checksum after an in-place mutation
+// and patches it into the header (bytes[184..192]) — every corruption below
+// only flips existing bytes, never resizes the buffer, so body_length
+// itself is never touched.
+fn patchGbcChecksum(bytes: []u8) void {
+    const body_start = 8 + gbc_writer.HEADER_SIZE;
+    const body_length = std.mem.readInt(u64, bytes[176..184], .little);
+    const body = bytes[body_start..][0..@as(usize, @intCast(body_length))];
+    const checksum = std.hash.XxHash64.hash(0, body);
+    std.mem.writeInt(u64, bytes[184..192], checksum, .little);
+}
+
+// Walks a CONSTANTS section's payload (past its leading u32 count),
+// mirroring gbc_reader's own constants-loop tag switch exactly, to find the
+// first constant of `want_tag` and return the file-absolute offset of its
+// trailing operand (FUNC_REF/TYPE_REF: a u32 index right after the tag byte).
+fn findConstantOperand(bytes: []const u8, section: GbcSection, want_tag: u8) usize {
+    var pos = section.payload_offset + 4; // past u32 const_count
+    while (true) {
+        const tag = bytes[pos];
+        const operand_pos = pos + 1;
+        const payload_len: usize = switch (tag) {
+            gbc_writer.CONST_NUMBER, gbc_writer.CONST_INT => 8,
+            gbc_writer.CONST_STRING => 4 + std.mem.readInt(u32, bytes[operand_pos..][0..4], .little),
+            gbc_writer.CONST_NULL => 0,
+            gbc_writer.CONST_BOOL => 1,
+            gbc_writer.CONST_RUNE => 4,
+            gbc_writer.CONST_FUNC_REF, gbc_writer.CONST_TYPE_REF => 4,
+            else => unreachable,
+        };
+        if (tag == want_tag) return operand_pos;
+        pos = operand_pos + payload_len;
+    }
+}
+
+test "gbc: reader rejects a header_size smaller than HEADER_SIZE (HeaderTooSmall)" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    std.mem.writeInt(u16, corrupted[8..10], gbc_writer.HEADER_SIZE - 1, .little);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.HeaderTooSmall, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, null));
+}
+
+test "gbc: reader rejects an unsupported header_version (UnsupportedHeaderVersion)" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    std.mem.writeInt(u16, corrupted[10..12], gbc_writer.HEADER_VERSION + 1, .little);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.UnsupportedHeaderVersion, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, null));
+}
+
+test "gbc: reader rejects a mismatched format_major (FormatMajorMismatch)" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    std.mem.writeInt(u16, corrupted[12..14], gbc_writer.FORMAT_MAJOR + 1, .little);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.FormatMajorMismatch, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, null));
+}
+
+test "gbc: reader rejects a non-zero reserved header byte (NonZeroReserved)" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    corrupted[34] = 1; // first of the 6 reserved bytes at absolute offset 34
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.NonZeroReserved, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, null));
+}
+
+test "gbc: reader rejects a header whose opt_hash doesn't match its own target/backend/flags (OptionsMismatch)" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    corrupted[144] ^= 0xFF; // first byte of opt_hash (absolute offset 144)
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.OptionsMismatch, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, null));
+}
+
+test "gbc: reader rejects a header whose vm_fingerprint doesn't match the running VM (VMFingerprintMismatch)" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    corrupted[80] ^= 0xFF; // first byte of vm_fp (absolute offset 80)
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.VMFingerprintMismatch, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, null));
+}
+
+test "gbc: reader rejects a header claiming more header bytes than the file has (TruncatedHeader)" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    // A huge header_size still satisfies HeaderTooSmall (only checks a lower
+    // bound) but pushes header_end well past the actual (short) buffer.
+    std.mem.writeInt(u16, corrupted[8..10], 60000, .little);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.TruncatedHeader, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, null));
+}
+
+test "gbc: reader rejects a body_length claim exceeding the file (TruncatedBody)" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    std.mem.writeInt(u64, corrupted[176..184], 0xFFFFFFFF, .little);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.TruncatedBody, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, null));
+}
+
+test "gbc: reader rejects a section count above 64 (MalformedSectionTable)" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    // Body's first 4 bytes are section_count; the check fires before any
+    // entry is read, so the rest of the body can stay untouched.
+    std.mem.writeInt(u32, corrupted[8 + gbc_writer.HEADER_SIZE ..][0..4], 65, .little);
+    patchGbcChecksum(corrupted);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.MalformedSectionTable, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, null));
+}
+
+test "gbc: reader rejects a section table entry whose length exceeds the body (SectionOutOfBounds)" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    const sec = findGbcSection(corrupted, gbc_writer.SEC_TYPES);
+    // Table entry layout: id(4) flags(4) offset(8) length(8) — length is the
+    // last 8 bytes of the 24-byte entry.
+    std.mem.writeInt(u64, corrupted[sec.table_pos + 16 ..][0..8], 0xFFFFFFFF, .little);
+    patchGbcChecksum(corrupted);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.SectionOutOfBounds, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, null));
+}
+
+test "gbc: reader rejects an artifact missing a required section (MissingRequiredSection)" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    const sec = findGbcSection(corrupted, gbc_writer.SEC_TYPES);
+    // Relabel SEC_TYPES's own table entry to an unused section id so
+    // findSection(..., SEC_TYPES) no longer finds it.
+    std.mem.writeInt(u32, corrupted[sec.table_pos..][0..4], 0x9999, .little);
+    patchGbcChecksum(corrupted);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.MissingRequiredSection, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, null));
+}
+
+test "gbc: reader rejects an unknown constant tag (BadConstantTag)" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    const sec = findGbcSection(corrupted, gbc_writer.SEC_CONSTANTS);
+    // The very first constant's tag byte, right after the section's leading
+    // u32 count — 0xFF isn't any defined CONST_* tag.
+    corrupted[sec.payload_offset + 4] = 0xFF;
+    patchGbcChecksum(corrupted);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.BadConstantTag, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, null));
+}
+
+test "gbc: reader rejects a CONST_FUNC_REF index past the functions table (FuncRefOutOfRange)" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "func f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "func f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    const sec = findGbcSection(corrupted, gbc_writer.SEC_CONSTANTS);
+    const operand = findConstantOperand(corrupted, sec, gbc_writer.CONST_FUNC_REF);
+    std.mem.writeInt(u32, corrupted[operand..][0..4], 0xFFFFFFFF, .little);
+    patchGbcChecksum(corrupted);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.FuncRefOutOfRange, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, null));
+}
+
+test "gbc: reader rejects a CONST_TYPE_REF index past the types table (TypeRefOutOfRange)" {
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try compile(&rt2, "type Score int\nfunc f() int { return 1 }");
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = "type Score int\nfunc f() int { return 1 }" });
+    defer std.testing.allocator.free(bytes);
+    const corrupted = try std.testing.allocator.dupe(u8, bytes);
+    defer std.testing.allocator.free(corrupted);
+    const sec = findGbcSection(corrupted, gbc_writer.SEC_CONSTANTS);
+    const operand = findConstantOperand(corrupted, sec, gbc_writer.CONST_TYPE_REF);
+    std.mem.writeInt(u32, corrupted[operand..][0..4], 0xFFFFFFFF, .little);
+    patchGbcChecksum(corrupted);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    rt3.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+    try std.testing.expectError(error.TypeRefOutOfRange, gbc_reader.read(corrupted, chunk.g_state, heap.g_state, rt3.vm_state.allocator, null));
 }
 
 // End-to-end: a real import("./mathlib.gbc") through the full Session/
@@ -5427,9 +5778,7 @@ test "gbc: readIntoSession splices a dependency's function into an existing chun
     // chunk (found the hard way: without this, const_base_before's own
     // "> 0" assertion still passed, but rt.chunk_state.const_count never
     // grew, because the splice landed in rt_dep.chunk_state instead).
-    chunk.setActive(rt.chunk_state);
-    globals.setActive(&rt.globals_state);
-    heap.setActive(&rt.heap_state);
+    rt.activate(); // see Runtime.activate()'s doc comment; see also the fixed-bug note above compile()
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -5903,6 +6252,102 @@ test "task: two concurrent Runtimes' task schedulers don't bleed into each other
     );
     const third = try rt1.callGlobal("getLast1b", &.{});
     try std.testing.expectEqual(@as(i64, 1002), third.int);
+}
+
+// Coverage gap audit (2026-08-20): task_state.zig's MaxTasks=64 ceiling and
+// claimSlot's error.TooManyTasks path had zero coverage — no test ever
+// spawned more than a couple of tasks. claimSlot() runs synchronously at
+// the spawn call site (vm.zig:1267), before the scheduler ever switches to
+// any of them, so main can fill the whole table with cooperative spawns
+// that never get a turn to run: slot 0 is permanently reserved and slot 1
+// is claimed by main itself (claimMainSlot), leaving exactly
+// MaxTasks-2 = 62 slots for spawned tasks.
+test "task: spawning past MaxTasks returns TooManyTasks instead of crashing" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.TooManyTasks, runSrc(&rt,
+        \\type NoOp task func() {}
+        \\for i := 0; i < 62; i++ {
+        \\    _ = NoOp()
+        \\}
+        \\_ = NoOp()
+    ));
+}
+
+// A task spawning another task, and using self()/receive() itself — not
+// just main doing the spawning — was never exercised by any test.
+test "task: a task can spawn another task and receive its reply" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Inner task func(reply actor) {
+        \\    reply.send(99)
+        \\}
+        \\type Outer task func(reply actor) {
+        \\    _ = Inner(self())
+        \\    v := receive()
+        \\    reply.send(v + 1)
+        \\}
+        \\_ = Outer(self())
+        \\result := receive()
+        \\func getResult() int { return result }
+    );
+    const result = try rt.callGlobal("getResult", &.{});
+    try std.testing.expectEqual(@as(i64, 100), result.int);
+}
+
+// More than the "a couple" every existing test used: 5 tasks spawned in
+// sequence, each replying with a distinctive value, verifying the ready
+// queue's strict FIFO order (§4.2) survives past the two-task case.
+test "task: five concurrently-ready tasks reply in spawn (FIFO) order" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Echo task func(n int, reply actor) {
+        \\    reply.send(n)
+        \\}
+        \\_ = Echo(10, self())
+        \\_ = Echo(20, self())
+        \\_ = Echo(30, self())
+        \\_ = Echo(40, self())
+        \\_ = Echo(50, self())
+        \\a := receive()
+        \\b := receive()
+        \\c := receive()
+        \\d := receive()
+        \\e := receive()
+        \\func getA() int { return a }
+        \\func getB() int { return b }
+        \\func getC() int { return c }
+        \\func getD() int { return d }
+        \\func getE() int { return e }
+    );
+    try std.testing.expectEqual(@as(i64, 10), (try rt.callGlobal("getA", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 20), (try rt.callGlobal("getB", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 30), (try rt.callGlobal("getC", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 40), (try rt.callGlobal("getD", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 50), (try rt.callGlobal("getE", &.{})).int);
+}
+
+// Coverage gap audit (2026-08-20): compiler_types.zig's MaxTypes=1024
+// ceiling (struct+interface+variant+named combined, per its own comment)
+// had zero coverage — DuplicateField turned out to already be thoroughly
+// covered by tests/spec/fail/{009,017,216,217,218,219,220,221,222}, but the
+// resource-ceiling checks (TooManyTypes here) genuinely weren't. Empty
+// interfaces are the cheapest declaration that still counts toward the
+// shared counter.
+test "compiler: declaring more than MaxTypes named types is rejected (TooManyTypes)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    var i: u32 = 0;
+    var buf: [32]u8 = undefined;
+    while (i <= ct.MaxTypes) : (i += 1) {
+        const line = try std.fmt.bufPrint(&buf, "type T{d} interface {{}}\n", .{i});
+        try src.appendSlice(std.testing.allocator, line);
+    }
+    try std.testing.expectError(error.TooManyTypes, runSrc(&rt, src.items));
 }
 
 fn netListenClientWorker(port: u16, connected: *std.atomic.Value(bool), echoed: *std.atomic.Value(bool)) void {

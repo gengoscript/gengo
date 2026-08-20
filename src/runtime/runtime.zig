@@ -1182,6 +1182,15 @@ pub const Runtime = struct {
         return scopes;
     }
 
+    // Always call this in full — never hand-reimplement a subset of these
+    // setActive calls at a call site. A caller that manually re-pinned only
+    // chunk/globals/heap (omitting vm/tasks_mod/fs_state/net_state/
+    // http_state) silently carried a stale tasks_mod.g_state pointer into
+    // GC's task-table walk (vm_gc.zig's collectGarbage), reading freed,
+    // 0xAA-poisoned memory — found only under -Dgc_stress=true (CI-only,
+    // see compiler_test.zig's ~28 manually-driven-VMContext tests, fixed
+    // 2026-08-20). The 3 fields that happened to be re-pinned by hand
+    // masked the bug for everything that only needed those three.
     pub fn activate(self: *Runtime) void {
         chunk.setActive(self.chunk_state);
         globals.setActive(&self.globals_state);

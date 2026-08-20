@@ -2,6 +2,50 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-08-20
+
+### Fix — cap:net IPv6 CIDR policy rules crashed (or hit UB in release builds) for virtually every real prefix length
+
+A coverage audit found `net_state.zig`'s `ipv6InCidr` had zero test
+coverage. The first CIDR test written for it (`"2001:db8::/32"`)
+immediately crashed: `bits` was typed `u3` (max representable value
+7), but `@min(remaining, 8)` legitimately equals 8 for any full byte
+of prefix — which is virtually every real-world IPv6 prefix length
+(8, 16, 24, 32, ..., 128), and any prefix length where an early byte
+is fully covered (e.g. `/12`). In Debug/ReleaseSafe this panicked
+("integer does not fit in destination type"); in ReleaseFast — what
+the shipped CLI actually runs — the same `@intCast` is undefined
+behavior instead of a panic, meaning an IPv6 CIDR deny rule could
+silently fail to match and let traffic through. Fixed by widening
+`bits` to `u4` (0-15 is ample for the real 1-8 range); the shift-amount
+computation immediately below already up-cast to `u4` before this fix,
+so it was a pure type-sizing bug, not a logic error. Added CIDR
+boundary tests (`/0`, `/32`-equivalent, `/128`-equivalent, in/out of
+subnet), wildcard-suffix subdomain-vs-lookalike-domain tests, and
+any-interface anti-bypass tests (`net_state.zig`).
+
+### Fix — every manually-driven VMContext test carried a stale `tasks_mod.g_state` pointer, invisible outside `-Dgc_stress=true`
+
+`Runtime.activate()` re-pins 8 process-global `setActive` pointers
+(chunk/globals/heap/vm/tasks_mod/fs_state/net_state/http_state)
+because `Runtime` is returned by value from test helpers and Zig does
+not guarantee that copy is elided — every real run/call entry point
+calls `activate()` on its own final, stable address for exactly this
+reason. `compiler_test.zig`'s ~28 tests that build a `vm.VMContext` by
+hand and call `vm.run()`/`vm.callGlobal()` directly (needed to drive
+`gbc_reader.read()` before there's a compiled program the normal entry
+points could run) instead re-pinned only 3 of those 8 pointers by
+hand — chunk/globals/heap — leaving `tasks_mod.g_state` (among others)
+pointed at a test-helper's now-defunct stack frame. Undetected because
+nothing dereferenced the stale pointer under normal test runs; found
+when a coverage-audit test happened to trigger a GC while running
+through this exact path (`vmAllocObject` under `-Dgc_stress=true`, a
+CI-only lane the local pre-push hook never runs): `vm_gc.zig`'s
+`collectGarbage` walked the task table through the stale pointer,
+read 0xAA-poisoned freed memory as `temp_root_top`, and panicked on
+the resulting garbage index. Fixed by replacing the manual 3-pointer
+triplet with `rt3.activate()` everywhere it occurred.
+
 ## 2026-08-19
 
 ### GBC — in-function predicates with real captures already worked; docs were wrong (#5)
