@@ -4,6 +4,49 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-08-21
 
+### Fix — cross-thread engine C-API race: wrong callback (and ctx) could serve the wrong engine
+
+Follow-up to an independent LLM's Tengo-vs-Gengo comparison, which flagged
+that `src/engine.zig`'s C-API layer holds process-global state distinct
+from the (already thread-local) internal `Runtime` state. Verified this is
+real and exploitable, not just theoretical.
+
+`engine.zig`'s `g_active_engine`/`write_callback`/`read_callback` and
+`host_abi.zig`'s `native_host_call_fn`/`native_host_call_ctx` were plain
+(non-thread-local) `var`s, overwritten by `pushEngineState`/`popEngineState`
+for the duration of every `engine_run`/`engine_call`. Two threads calling
+into two *different* engines concurrently — an officially-supported usage
+pattern per `docs/embedding.md` ("one runtime per thread... may be used
+independently, including concurrently from different threads") — could
+interleave those writes, so one engine's script ran with the *other*
+engine's write/read callback, or (via `host_abi.setNativeHostCall`) the
+other engine's host-call function paired with the other engine's `ctx` — a
+real type-confusion hazard, since a host callback `@ptrCast`/`@alignCast`s
+that `ctx` back to its own expected struct type.
+
+Confirmed with a real two-thread repro before fixing: two engines with
+distinct host-call contexts, hammered concurrently via `engine_run`/
+`engine_call`, reliably produced wrong results (one engine's calls computed
+using the other engine's context) — and even corrupted an unrelated,
+later-running test in the same process, demonstrating how far the
+contamination reaches. All 8 of the *internal* `Runtime.activate()`-pinned
+state pointers (chunk/globals/heap/vm/tasks/fs/net/http) were already
+`threadlocal`, so this was scoped to exactly these 5 fields. Fixed by
+making all 5 `threadlocal`, matching the existing pattern; added a
+regression test (`engine.zig`, two real OS threads racing two engines'
+host-call callbacks) that fails reliably on the old code and passes
+deterministically on the fix. Verified under standard, `-Dpreset=stress`,
+and `-Dgc_stress=true` builds.
+
+Separately (not fixed, out of scope for this pass): `io.zig`'s own trace
+state (`g_trace_fn`/`g_trace_userdata`/`g_trace_handle`) is the same class
+of non-thread-local global, and `engine.zig`'s native test suite
+(`zig build engine-api-test`) already has one pre-existing, order-dependent
+flaky test (`engine_set_trace_fn fires per source line`) caused by it —
+confirmed present on a clean checkout, unrelated to this fix. That test
+suite is also not currently wired into `zig build test` or the pre-push
+hook, so it isn't exercised by CI at all.
+
 ### Audit — duplication/DRY sweep across native modules, VM arithmetic, and the compiler
 
 Four parallel audits (VM/opcode layer, native capability modules, compiler

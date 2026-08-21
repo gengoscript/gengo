@@ -42,12 +42,29 @@ const HostCallCallback = host_abi.NativeHostCallFn;
 // Active-engine state — set for the duration of engine_run / engine_call so that
 // write/read callbacks and capability handlers resolve to the calling engine's
 // per-instance configuration rather than a process-global slot.
-var g_active_engine: ?*Engine = null;
+//
+// threadlocal, not a plain process-global: the internal Runtime state these
+// wrap (chunk/globals/heap/vm/tasks/fs/net/http, all pinned by
+// Runtime.activate() below) is already threadlocal for exactly this reason.
+// Before this was threadlocal, two threads calling engine_run/engine_call on
+// two DIFFERENT engines concurrently could interleave pushEngineState's
+// writes, so one engine's script ran with the OTHER engine's write/read
+// callback (or, via host_abi.setNativeHostCall below, the other engine's
+// host-call function AND ctx) for the remainder of its execution — silent
+// misrouting at best (output/reads crossing engines), real type confusion
+// at worst (a host callback invoked with a foreign ctx it @ptrCast/@alignCast
+// s to its own expected type). Confirmed via a real two-thread repro (see
+// "two engines' host-call callbacks stay isolated..." below) before this
+// fix: it failed, and even corrupted an unrelated later test in the same
+// process. docs/embedding.md already promises "one runtime per thread...
+// active-runtime tracking is thread-local" — this makes that true for the
+// whole C-API surface, not just the internal Runtime layer.
+threadlocal var g_active_engine: ?*Engine = null;
 
 // Process-global active slots — overwritten by pushEngineState for each ABI
 // operation and restored by popEngineState on return.
-var write_callback: ?WriteCallback = null;
-var read_callback: ?ReadCallback = null;
+threadlocal var write_callback: ?WriteCallback = null;
+threadlocal var read_callback: ?ReadCallback = null;
 
 const ImportLoaderFn = *const fn (
     ctx: ?*anyopaque,
@@ -1814,6 +1831,88 @@ test "native host modules dispatch through the registered callback" {
     try std.testing.expectEqual(0, engine_call(handle, @intFromPtr("answer".ptr), 6, 0, 0, @intFromPtr(&out)));
     try std.testing.expectEqual(@as(i64, 42), @as(i64, @bitCast(out.payload)));
     try std.testing.expectEqual(@as(usize, 2), context.module_calls);
+}
+
+const HostCallRaceContext = struct {
+    factor: i64,
+
+    fn callback(context: ?*anyopaque, id: u16, args: [*]const ValueWire, argc: u16, out: *ValueWire) callconv(.c) i32 {
+        const self = @as(*@This(), @ptrCast(@alignCast(context.?)));
+        switch (id) {
+            @intFromEnum(host_abi.HostCall.abi_version) => {
+                out.* = .{ .tag = @intFromEnum(WireTag.number), .flags = 0, .reserved = 0, .payload = @bitCast(@as(f64, @floatFromInt(host_abi.ABI_VERSION))), .len = 0, .reserved2 = 0 };
+                return @intFromEnum(host_abi.CallStatus.ok);
+            },
+            HostModuleCallIdBase => {
+                if (argc != 1 or args[0].tag != @intFromEnum(WireTag.number) or (args[0].flags & host_abi.FLAG_INTEGER) == 0) return @intFromEnum(host_abi.CallStatus.bad_args);
+                const value: i64 = @bitCast(args[0].payload);
+                out.* = .{ .tag = @intFromEnum(WireTag.number), .flags = host_abi.FLAG_INTEGER, .reserved = 0, .payload = @bitCast(value * self.factor), .len = 0, .reserved2 = 0 };
+                return @intFromEnum(host_abi.CallStatus.ok);
+            },
+            else => return @intFromEnum(host_abi.CallStatus.unsupported),
+        }
+    }
+};
+
+// Worker for the host-call cross-thread race test below: engine.zig's
+// g_active_engine/write_callback/read_callback (this file) and
+// host_abi.zig's native_host_call_fn/native_host_call_ctx are plain (not
+// threadlocal) globals, overwritten by pushEngineState/popEngineState for
+// the duration of every engine_run/engine_call. Two threads calling those
+// entry points on two DIFFERENT engines concurrently can interleave those
+// writes, so one engine's host-call callback runs with the OTHER engine's
+// ctx pointer — every call below multiplies by this worker's own `factor`,
+// so a wrong (foreign) ctx surfaces as a wrong product, not a crash.
+fn hostCallRaceWorker(handle: i32, factor: i64, iterations: usize, failed: *std.atomic.Value(bool)) void {
+    var context: HostCallRaceContext = .{ .factor = factor };
+    if (engine_set_host_call_fn(handle, HostCallRaceContext.callback, &context) != 0) {
+        failed.store(true, .seq_cst);
+        return;
+    }
+    const funcs = [_]HostModuleFuncDef{.{ .name_ptr = @intFromPtr("mul".ptr), .name_len = 3, .arity = 1 }};
+    if (engine_register_module(handle, @intFromPtr("m".ptr), 1, @intFromPtr(&funcs), funcs.len) != 0) {
+        failed.store(true, .seq_cst);
+        return;
+    }
+    const source =
+        \\m := import("host:m")
+        \\pub func answer(x int) int { return m.mul(x) }
+    ;
+    if (engine_run(handle, @intFromPtr(source.ptr), source.len) != 0) {
+        failed.store(true, .seq_cst);
+        return;
+    }
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        var args = [_]ValueWire{.{ .tag = @intFromEnum(WireTag.number), .flags = host_abi.FLAG_INTEGER, .reserved = 0, .payload = @bitCast(@as(i64, 7)), .len = 0, .reserved2 = 0 }};
+        var out: ValueWire = undefined;
+        if (engine_call(handle, @intFromPtr("answer".ptr), 6, @intFromPtr(&args), 1, @intFromPtr(&out)) != 0) {
+            failed.store(true, .seq_cst);
+            return;
+        }
+        const got: i64 = @bitCast(out.payload);
+        if (got != 7 * factor) {
+            failed.store(true, .seq_cst);
+            return;
+        }
+    }
+}
+
+test "two engines' host-call callbacks stay isolated when engine_run/engine_call race across threads" {
+    if (comptime is_wasm) return;
+    const handleA = engine_init();
+    try std.testing.expect(handleA > 0);
+    defer engine_destroy(handleA);
+    const handleB = engine_init();
+    try std.testing.expect(handleB > 0);
+    defer engine_destroy(handleB);
+
+    var failed = std.atomic.Value(bool).init(false);
+    const t1 = try std.Thread.spawn(.{}, hostCallRaceWorker, .{ handleA, @as(i64, 2), @as(usize, 2000), &failed });
+    const t2 = try std.Thread.spawn(.{}, hostCallRaceWorker, .{ handleB, @as(i64, 3), @as(usize, 2000), &failed });
+    t1.join();
+    t2.join();
+    try std.testing.expect(!failed.load(.seq_cst));
 }
 
 test "engine_call: recover() in defer intercepts panic" {

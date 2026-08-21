@@ -40,8 +40,16 @@ pub const NativeHostCallFn = *const fn (
     out: *ValueWire,
 ) callconv(.c) i32;
 
-var native_host_call_fn: ?NativeHostCallFn = null;
-var native_host_call_ctx: ?*anyopaque = null;
+// threadlocal: set together by engine.zig's pushEngineState/popEngineState
+// for the duration of one engine_run/engine_call. As plain (non-threadlocal)
+// vars these two writes could tear across two threads calling into
+// different engines concurrently — engine B's callback function paired with
+// engine A's ctx pointer, a real type-confusion hazard since callbacks
+// @ptrCast/@alignCast ctx back to their own expected struct type. See
+// engine.zig's g_active_engine doc comment for the full writeup and the
+// two-thread repro that caught it.
+threadlocal var native_host_call_fn: ?NativeHostCallFn = null;
+threadlocal var native_host_call_ctx: ?*anyopaque = null;
 
 pub fn setNativeHostCall(fn_ptr: ?NativeHostCallFn, ctx: ?*anyopaque) void {
     native_host_call_fn = fn_ptr;
