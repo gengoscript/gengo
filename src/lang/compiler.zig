@@ -1205,7 +1205,21 @@ pub const Compiler = struct {
         const dname = dunderMethodName(op);
         if (is_struct) {
             const candidate = std.fmt.bufPrint(buf, "{s}.{s}", .{ type_name, dname }) catch return null;
-            return if (self.registry.hasGlobalFunc(candidate)) candidate else null;
+            if (self.registry.hasGlobalFunc(candidate)) return candidate;
+            // type_name here is a struct literal's ExprPrimInfo.struct_type,
+            // which for a generic instantiation is the CONCRETE qualified
+            // name (e.g. "Stack[int]") — checkFieldValueCompatibility's own
+            // generic-args fallback (this file, struct_t case) needs that
+            // exact form to validate a field assignment. But a generic
+            // struct's methods are registered once, type-erased, under the
+            // bare template name (methodDecl's qrecv_type, computed before
+            // the receiver's `[T]` is parsed) — so retry stripped down to
+            // the part before '[' when the direct lookup misses.
+            if (std.mem.indexOfScalar(u8, type_name, '[')) |bi| {
+                const base_candidate = std.fmt.bufPrint(buf, "{s}.{s}", .{ type_name[0..bi], dname }) catch return null;
+                return if (self.registry.hasGlobalFunc(base_candidate)) base_candidate else null;
+            }
+            return null;
         }
         var lookup: ?[]const u8 = type_name;
         while (lookup) |cur| {

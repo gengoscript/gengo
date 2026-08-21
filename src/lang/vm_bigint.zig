@@ -142,7 +142,13 @@ pub fn promoteInt(ctx: VMContext, n: i64, other: Value) !Value {
     return fromInt(ctx, n);
 }
 
-pub fn addBi(ctx: VMContext, a: Value, b: Value) !Value {
+// addBi/subBi were identical except for r.add vs r.sub — a prior bug
+// (pushSubResult missing the bigint check computeAddResult had, in vm.zig's
+// fused-subtraction opcodes) came from exactly this "same shape, two
+// hand-written copies" pattern elsewhere in the bigint path, so kept as one
+// shared body here rather than copy-pasted a third time for whatever binary
+// op comes next.
+fn addSubBi(ctx: VMContext, a: Value, b: Value, comptime op: enum { add, sub }) !Value {
     try ctx.vs.pushTempRoot(a);
     defer ctx.vs.popTempRoot();
     try ctx.vs.pushTempRoot(b);
@@ -154,26 +160,20 @@ pub fn addBi(ctx: VMContext, a: Value, b: Value) !Value {
     const limbs = try vmgc.vmAllocManagedSlice(ctx, Limb, cap);
 
     var r = Bi.Mutable{ .limbs = limbs, .len = 0, .positive = true };
-    r.add(a.object.bigint.toConst(), b.object.bigint.toConst());
+    switch (op) {
+        .add => r.add(a.object.bigint.toConst(), b.object.bigint.toConst()),
+        .sub => r.sub(a.object.bigint.toConst(), b.object.bigint.toConst()),
+    }
     obj.* = .{ .bigint = .{ .limbs = limbs, .len = r.len, .positive = r.positive } };
     return .{ .object = obj };
 }
 
+pub fn addBi(ctx: VMContext, a: Value, b: Value) !Value {
+    return addSubBi(ctx, a, b, .add);
+}
+
 pub fn subBi(ctx: VMContext, a: Value, b: Value) !Value {
-    try ctx.vs.pushTempRoot(a);
-    defer ctx.vs.popTempRoot();
-    try ctx.vs.pushTempRoot(b);
-    defer ctx.vs.popTempRoot();
-
-    const cap = @max(a.object.bigint.len, b.object.bigint.len) + 1;
-    const obj = try vmgc.allocTempRooted(ctx, .{ .bigint = .{ .limbs = &[_]Limb{}, .len = 0, .positive = true } });
-    defer ctx.vs.popTempRoot();
-    const limbs = try vmgc.vmAllocManagedSlice(ctx, Limb, cap);
-
-    var r = Bi.Mutable{ .limbs = limbs, .len = 0, .positive = true };
-    r.sub(a.object.bigint.toConst(), b.object.bigint.toConst());
-    obj.* = .{ .bigint = .{ .limbs = limbs, .len = r.len, .positive = r.positive } };
-    return .{ .object = obj };
+    return addSubBi(ctx, a, b, .sub);
 }
 
 pub fn mulBi(ctx: VMContext, a: Value, b: Value) !Value {

@@ -135,12 +135,7 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         .cap_fs_write => {
             if (argc != 2) return error.ArityMismatch;
             const path = vms.asStringValue(try ctx.vs.vmPeek(1)) catch return error.TypeError;
-            const arg1 = try ctx.vs.vmPeek(0);
-            const content: []const u8 = switch (arg1) {
-                .string => |s| s.bytes,
-                .object => |o| if (o.* == .dyn_string) o.dyn_string else if (o.* == .string_view) o.string_view.bytes else return error.TypeError,
-                else => return error.TypeError,
-            };
+            const content = vms.asStringValue(try ctx.vs.vmPeek(0)) catch return error.TypeError;
 
             const lr = try fs_state.lookup(ctx.vs.fs_es, path);
             if (lr.mount.kind == .driver) {
@@ -322,4 +317,37 @@ test "cap_fs path extraction accepts string and dyn_string" {
     const dyn = try vmgc.makeDynString(ctx, "test.txt");
     const ds = vms.asStringValue(dyn) catch return error.TestFailed;
     try std.testing.expectEqualStrings("test.txt", ds);
+}
+
+// Regression: cap_fs_write's content argument used to be extracted through a
+// hand-rolled .string/.dyn_string/.string_view switch with no .named_value
+// case, unlike every other string-accepting argument in this file (which go
+// through vms.asStringValue, which does unwrap .named_value). A value of a
+// named string type (e.g. `type Path string`) passed as fs.write's content
+// raised a spurious TypeError. cap_fs_write now calls vms.asStringValue
+// directly, so this exercises the same unwrap the fix relies on.
+test "cap_fs write content accepts a named string-type value" {
+    const Runtime = @import("../../runtime/runtime.zig").Runtime;
+    var rt: Runtime = undefined;
+    rt.initWithPolicy(.{ .allow_io = false }) catch return error.TestFailed;
+    defer rt.deinit();
+
+    const ctx = vms.VMContext.fromActive();
+    const vmtyp = @import("../vm_types.zig");
+
+    const typ_obj = try vmgc.vmAllocObject(ctx);
+    typ_obj.* = .{ .named_type = .{ .name = "Content", .qualified_name = "Content", .base = .string } };
+    // Root typ_obj before the further allocations below (makeNamedValue's
+    // own vmAllocObject, internStr): under -Dgc_stress=true every
+    // allocation can trigger a GC pass, and typ_obj isn't reachable from
+    // any root yet (no global, no VM stack slot) until it's wrapped into
+    // the named value it backs.
+    try ctx.vs.pushTempRoot(.{ .object = typ_obj });
+    defer ctx.vs.popTempRoot();
+
+    const inner = try ctx.cs.internStr("hello named content");
+    const named = vmtyp.makeNamedValue(ctx, typ_obj, .{ .string = inner }) catch return error.TestFailed;
+
+    const content = vms.asStringValue(named) catch return error.TestFailed;
+    try std.testing.expectEqualStrings("hello named content", content);
 }

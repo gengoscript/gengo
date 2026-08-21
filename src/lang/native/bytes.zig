@@ -5,6 +5,7 @@ const vmgc = @import("../vm_gc.zig");
 const Value = @import("../value.zig").Value;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
+const common = @import("../common.zig");
 
 fn makeBinaryString(ctx: VMContext, bytes: []const u8) !Value {
     const obj = try vmgc.allocTempRooted(ctx, .{ .dyn_string = &[_]u8{} });
@@ -20,10 +21,13 @@ fn makeBinaryString(ctx: VMContext, bytes: []const u8) !Value {
     return .{ .object = obj };
 }
 
+// found via `bytes.u8(1e300)`, reachable from any script with no capability
+// required, aborting the whole host process before the isFinite/bounds
+// check below was added — see common.safeI64FromFloat's doc comment.
 fn argAsI64(v: Value) !i64 {
     return switch (v) {
         .int => |n| n,
-        .float => |n| @as(i64, @intFromFloat(n)),
+        .float => |n| common.safeI64FromFloat(n) catch return error.RangeError,
         else => error.TypeError,
     };
 }

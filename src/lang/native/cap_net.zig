@@ -10,6 +10,7 @@ const net_state = @import("net_state.zig");
 const globals = @import("../globals.zig");
 const MapEntry = @import("../value.zig").MapEntry;
 const chunk = @import("../chunk.zig");
+const common = @import("../common.zig");
 
 fn extractHandle(arg: Value) !u32 {
     const obj = switch (arg) {
@@ -58,10 +59,7 @@ fn extractUsize(arg: Value) !usize {
 fn extractI64(arg: Value) !i64 {
     return switch (arg) {
         .int => |n| n,
-        .float => |n| blk: {
-            if (!std.math.isFinite(n) or n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
-            break :blk @as(i64, @intFromFloat(n));
-        },
+        .float => |n| common.safeI64FromFloat(n) catch return error.TypeError,
         else => return error.TypeError,
     };
 }
@@ -110,82 +108,54 @@ fn ioContext() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
 
+// cap_net_dial and cap_net_dial_tls differ only in which scope-check
+// message they raise and which net_state function actually connects — kept
+// as one implementation so a future fix to the shared arg-extraction,
+// policy-check, or connection-object-building steps can't land on one and
+// miss the other, the same divergence class that caused this session's
+// .mod/.int_div and cap_net/cap_ffi NaN-guard bugs.
+fn dialImpl(ctx: VMContext, argc: u8, use_tls: bool) !void {
+    if (argc != 2) return error.ArityMismatch;
+    const arg1 = try ctx.vs.vmPop();
+    const arg0 = try ctx.vs.vmPop();
+    const network = vms.asStringValue(arg0) catch return error.TypeError;
+    const address = vms.asStringValue(arg1) catch return error.TypeError;
+    _ = try ctx.vs.vmPop();
+
+    if (!ctx.vs.net_scopes.dial) {
+        try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr(if (use_tls) "net.dial_tls: dial scope not granted (--cap net=dial)" else "net.dial: dial scope not granted (--cap net=dial)") });
+        return;
+    }
+
+    if (!net_state.checkDialPolicy(address)) {
+        try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr(if (use_tls) "net.dial_tls: refused by policy" else "net.dial: refused by policy") });
+        return;
+    }
+
+    const id = (if (use_tls) net_state.netDialTls(network, address) else net_state.netDial(network, address)) catch {
+        try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr(net_state.lastNetErr()) });
+        return;
+    };
+
+    const conn_type_val = ctx.gs.get("@cap_type:net.Conn") orelse return error.CapabilityError;
+    const conn_type_obj = switch (conn_type_val) {
+        .object => |o| o,
+        else => return error.CapabilityError,
+    };
+
+    const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 1);
+    const inst_obj = try vmgc.vmAllocObject(ctx);
+    inst_obj.* = .{ .struct_instance = .{ .typ = conn_type_obj, .fields = inst_fields } };
+    try ctx.vs.pushTempRoot(.{ .object = inst_obj });
+    defer ctx.vs.popTempRoot();
+    inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("_handle") }, .value = .{ .int = @as(i64, id) } };
+    try ctx.vs.vmPush(.{ .object = inst_obj });
+}
+
 pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     switch (@as(NativeFnId, @enumFromInt(nf.id))) {
-        .cap_net_dial => {
-            if (argc != 2) return error.ArityMismatch;
-            const arg1 = try ctx.vs.vmPop();
-            const arg0 = try ctx.vs.vmPop();
-            const network = vms.asStringValue(arg0) catch return error.TypeError;
-            const address = vms.asStringValue(arg1) catch return error.TypeError;
-            _ = try ctx.vs.vmPop();
-
-            if (!ctx.vs.net_scopes.dial) {
-                try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr("net.dial: dial scope not granted (--cap net=dial)") });
-                return;
-            }
-
-            if (!net_state.checkDialPolicy(address)) {
-                try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr("net.dial: refused by policy") });
-                return;
-            }
-
-            const id = net_state.netDial(network, address) catch {
-                try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr(net_state.lastNetErr()) });
-                return;
-            };
-
-            const conn_type_val = ctx.gs.get("@cap_type:net.Conn") orelse return error.CapabilityError;
-            const conn_type_obj = switch (conn_type_val) {
-                .object => |o| o,
-                else => return error.CapabilityError,
-            };
-
-            const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 1);
-            const inst_obj = try vmgc.vmAllocObject(ctx);
-            inst_obj.* = .{ .struct_instance = .{ .typ = conn_type_obj, .fields = inst_fields } };
-            try ctx.vs.pushTempRoot(.{ .object = inst_obj });
-            defer ctx.vs.popTempRoot();
-            inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("_handle") }, .value = .{ .int = @as(i64, id) } };
-            try ctx.vs.vmPush(.{ .object = inst_obj });
-        },
-        .cap_net_dial_tls => {
-            if (argc != 2) return error.ArityMismatch;
-            const arg1 = try ctx.vs.vmPop();
-            const arg0 = try ctx.vs.vmPop();
-            const network = vms.asStringValue(arg0) catch return error.TypeError;
-            const address = vms.asStringValue(arg1) catch return error.TypeError;
-            _ = try ctx.vs.vmPop();
-
-            if (!ctx.vs.net_scopes.dial) {
-                try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr("net.dial_tls: dial scope not granted (--cap net=dial)") });
-                return;
-            }
-
-            if (!net_state.checkDialPolicy(address)) {
-                try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr("net.dial_tls: refused by policy") });
-                return;
-            }
-
-            const id = net_state.netDialTls(network, address) catch {
-                try ctx.vs.vmPush(.{ .error_value = try ctx.cs.internStr(net_state.lastNetErr()) });
-                return;
-            };
-
-            const conn_type_val = ctx.gs.get("@cap_type:net.Conn") orelse return error.CapabilityError;
-            const conn_type_obj = switch (conn_type_val) {
-                .object => |o| o,
-                else => return error.CapabilityError,
-            };
-
-            const inst_fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 1);
-            const inst_obj = try vmgc.vmAllocObject(ctx);
-            inst_obj.* = .{ .struct_instance = .{ .typ = conn_type_obj, .fields = inst_fields } };
-            try ctx.vs.pushTempRoot(.{ .object = inst_obj });
-            defer ctx.vs.popTempRoot();
-            inst_fields[0] = .{ .key = .{ .string = try ctx.cs.internStr("_handle") }, .value = .{ .int = @as(i64, id) } };
-            try ctx.vs.vmPush(.{ .object = inst_obj });
-        },
+        .cap_net_dial => try dialImpl(ctx, argc, false),
+        .cap_net_dial_tls => try dialImpl(ctx, argc, true),
         .cap_net_listen => {
             if (argc != 2) return error.ArityMismatch;
             const arg1 = try ctx.vs.vmPop();

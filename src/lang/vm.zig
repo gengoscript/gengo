@@ -892,13 +892,19 @@ fn resolveInlineVariantMethod(ctx: VMContext, iv: vmod.InlineVariantValue, mname
 }
 
 pub fn floatToIntSafe(n: f64) !i64 {
-    if (!std.math.isFinite(n) or
-        n < @as(f64, @floatFromInt(std.math.minInt(i64))) or
-        n >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.RangeError;
-    const t = @trunc(n);
-    const as_i64: i64 = @intFromFloat(t);
-    if (@as(f64, @floatFromInt(as_i64)) != t) return error.RangeError;
-    return as_i64;
+    return common.safeI64FromFloat(n);
+}
+
+// minInt(i64) / -1 mathematically overflows (2^63, one past i64's range) —
+// @divTrunc/@rem/@mod all trap/UB on it. Checked independently at each of
+// .int_div's two paths (int/int fast path and the named/decimal carrier
+// path), .rem, and .mod — a prior bug came from this exact guard being
+// present on three of those four and missing on the fourth (.mod). Kept
+// as one inline helper so a future opcode needing the same check can't
+// silently omit it; not a comptime/opcode-table change, so it doesn't
+// touch this loop's dispatch shape.
+inline fn divModOverflows(a: i64, b: i64) bool {
+    return a == std.math.minInt(i64) and b == -1;
 }
 
 fn checkNamedTypePredicate(ctx: VMContext, nt_obj: *Object, inner: Value) !void {
@@ -3285,7 +3291,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     // past maxInt) — the old code sidestepped @divTrunc's trap
                     // but returned the unmodified dividend as if it were the
                     // quotient, a silently wrong answer rather than an error.
-                    if (a.int == std.math.minInt(i64) and b.int == -1) {
+                    if (divModOverflows(a.int, b.int)) {
                         ctx.vs.setRuntimeErr("integer overflow in division", .{});
                         return error.RangeError;
                     }
@@ -3320,7 +3326,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 // a mathematically wrong answer (the true result is 2^63, one
                 // past i64's range), reintroducing the exact bug the plain
                 // int/int path above was already fixed for.
-                if (an_int == std.math.minInt(i64) and bn_int == -1) {
+                if (divModOverflows(an_int, bn_int)) {
                     ctx.vs.setRuntimeErr("integer overflow in division", .{});
                     return error.RangeError;
                 }
@@ -3335,7 +3341,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                         ctx.vs.setRuntimeErr("division by zero", .{});
                         return error.DivisionByZero;
                     }
-                    const result: i64 = if (a.int == std.math.minInt(i64) and b.int == -1) 0 else @rem(a.int, b.int);
+                    const result: i64 = if (divModOverflows(a.int, b.int)) 0 else @rem(a.int, b.int);
                     try ctx.vs.vmPush(.{ .int = result });
                     continue;
                 }
@@ -3374,7 +3380,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     // (2^63, one past maxInt) — @mod traps/UB's on it exactly
                     // like @divTrunc/@rem do, and x mod ±1 is always 0
                     // mathematically, matching .rem's guard for this case.
-                    const result: i64 = if (a.int == std.math.minInt(i64) and b.int == -1) 0 else @mod(a.int, b.int);
+                    const result: i64 = if (divModOverflows(a.int, b.int)) 0 else @mod(a.int, b.int);
                     try ctx.vs.vmPush(.{ .int = result });
                     continue;
                 }

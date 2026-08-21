@@ -2,6 +2,69 @@
 
 This changelog tracks notable language/runtime changes by implementation date.
 
+## 2026-08-21
+
+### Audit — duplication/DRY sweep across native modules, VM arithmetic, and the compiler
+
+Four parallel audits (VM/opcode layer, native capability modules, compiler
+parsing/type-checking, GBC+runtime state) went looking for copy-pasted code
+whose copies had already drifted, or were one edit away from drifting, plus
+opportunities to consolidate safely. Confirmed and fixed:
+
+- **cap_ffi.zig's `extractI64`** was missing the `isFinite` NaN guard its
+  sibling `cap_net.zig` copy already had fixed — a NaN passed as an FFI
+  call's int argument reached `@intFromFloat` unchecked (safety-checked
+  illegal behavior, process abort).
+- **bytes.zig's `argAsI64`** had the same gap, and unlike the FFI case is
+  reachable with **no capability required at all** — `std.bytes.u8(1e300)`
+  aborted the whole host process from any script.
+- Both, plus `vm.floatToIntSafe` and `core.zig`'s separate
+  `floatToIntChecked`, were four independent hand-written copies of the
+  same NaN/Infinity/out-of-i64-range check. Consolidated into one
+  `common.safeI64FromFloat`, called from all four sites (`vm.zig`,
+  `core.zig`, `cap_net.zig`, `cap_ffi.zig`, `bytes.zig`).
+- **cap_fs.zig's `cap_fs_write`** extracted its content argument through a
+  hand-rolled `.string`/`.dyn_string`/`.string_view` switch with no
+  `.named_value` case, unlike every other string argument in the file
+  (which already go through `vms.asStringValue`, which does unwrap
+  `.named_value`) — a value of a named string type (`type Path string`)
+  passed as `fs.write`'s content raised a spurious `TypeError`. Now calls
+  `vms.asStringValue` directly, like its neighbors.
+- **`structInstanceLitAfterValue`** (the struct-literal path used for
+  generic instantiations and type aliases of them, e.g. `Box[int]{...}`)
+  left no `ExprPrimInfo` on its result at all, unlike its sibling
+  `structInstanceLit` (plain `Name{...}`) — so a dunder operator
+  (`__add__` etc.) declared on a generic struct was unreachable when the
+  literal was built directly in an expression rather than read back out of
+  a variable first. Fixing this surfaced a second, subtler issue:
+  `lookupDunderCallee` only ever tried the literal's *concrete* qualified
+  name (e.g. `"Box[int]"`), but a generic struct's methods are registered
+  once, type-erased, under the *template's* qualified name (`"Box"`) —
+  while `checkFieldValueCompatibility`'s struct_t case needs the concrete
+  form to validate a field of generic type. `lookupDunderCallee` now falls
+  back to the name stripped of its `[...]` suffix when the direct lookup
+  misses, so both consumers are satisfied from the same value.
+- **`Runtime.init()`** was missing `fs_state.setActive(&rt.fs_mounts)` —
+  every other per-runtime process-global (chunk/globals/heap/vm/tasks/net/
+  http) was pinned inline in this function, just not this one.
+  `initWithConfig()` (its heap-init sibling) already had it.
+- Minor consolidations with no behavior change: `vm.zig`'s four independent
+  copies of the `minInt(i64)/-1` division-overflow guard (already the exact
+  bug class that caused a prior `.mod` bug) now share one `divModOverflows`
+  helper; `vm_bigint.zig`'s `addBi`/`subBi` (identical but for `r.add` vs
+  `r.sub`) now share one `addSubBi` body; `cap_net.zig`'s `cap_net_dial`/
+  `cap_net_dial_tls` (identical but for the scope-check message and which
+  `net_state` function connects) now share one `dialImpl`.
+
+Flagged but deliberately not acted on (real duplication, but perf-critical
+or disproportionate to fix): `fusion_pass.zig`/`vm_defuse.zig`'s mirrored
+per-opcode width tables (encode vs. decode, ~30 opcodes, nothing enforces
+agreement but tests); `gbc_writer.zig`/`gbc_reader.zig`'s hand-rolled
+symmetric section read/write pairs (inherent to a hand-rolled binary
+format); `vm.zig`'s `.div`/`.int_div`/`.rem`/`.mod` int/int fast-path
+guards (already correct, but a function-call indirection in the hottest
+per-instruction dispatch path isn't worth the risk for a one-line check).
+
 ## 2026-08-20
 
 ### Fix — REPL: a string global (bare, or nested in an array/map) silently corrupted on the next line

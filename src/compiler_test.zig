@@ -3177,6 +3177,28 @@ test "compiler: std.bytes decode family matches the native-call path byte for by
 // catchable RangeError like every other out-of-bounds offset — decodeAt's
 // multi-byte variants (everything but byte_at) cast straight to usize
 // without checking the sign first. Fixed with offsetToUsize (bytes.zig).
+// bytes.zig's argAsI64 (backing std.bytes.u8/u16be/pack/slice/etc.) fed a
+// NaN or out-of-i64-range float straight into @intFromFloat, which is
+// safety-checked illegal behavior (process abort) for either — reachable
+// from any script with no capability required, unlike vm.zig/core.zig's
+// analogous conversions which already guarded against this.
+test "compiler: std.bytes.u8 raises RangeError (not a crash) on NaN/Inf/huge float" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func viaNan() string { return std.bytes.u8(std.math.nan()) }
+        \\func viaInf() string { return std.bytes.u8(std.math.inf) }
+        \\func viaHuge() string { return std.bytes.u8(1e300) }
+        \\func viaOk() string { return std.bytes.u8(65) }
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("viaNan", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("viaInf", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("viaHuge", &.{}));
+    const ok = try rt.callGlobal("viaOk", &.{});
+    try std.testing.expectEqualStrings("A", try vms.asStringValue(ok));
+}
+
 test "compiler: std.bytes decode family raises RangeError (not a crash) on a negative offset" {
     var rt = try setup();
     defer rt.deinit();
@@ -4322,6 +4344,27 @@ test "compiler: multiple methods on the same generic struct receiver" {
         \\}
     );
     const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 3), result.int);
+}
+
+// structInstanceLitAfterValue (the struct-literal path used for generic
+// instantiations, e.g. Box[int]{...}, and type aliases of them) used to
+// leave no ExprPrimInfo on its result at all, unlike its sibling
+// structInstanceLit (plain Name{...}) — so a dunder operator declared on a
+// generic struct was unreachable when the literal was used directly in an
+// expression (not read back out of a variable first, whose static type is
+// tracked separately from ExprPrimInfo).
+test "compiler: dunder operator dispatches on a generic struct literal built directly in an expression" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Box[T] struct { v T }
+        \\func (a Box[T]) __add__(b Box[T]) Box[T] { return Box[T]{ v: a.v + b.v } }
+        \\func direct() int {
+        \\    return (Box[int]{ v: 1 } + Box[int]{ v: 2 }).v
+        \\}
+    );
+    const result = try rt.callGlobal("direct", &.{});
     try std.testing.expectEqual(@as(i64, 3), result.int);
 }
 

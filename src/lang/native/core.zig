@@ -176,27 +176,16 @@ pub fn nativeGcStatsExt(ctx: VMContext) !Value {
     return .{ .object = obj };
 }
 
-// @intFromFloat panics on NaN, +/-Infinity, or any magnitude outside i64's
-// range, so every float-to-int conversion here must reject those first and
-// raise a catchable error instead.
-fn floatToIntChecked(n: f64) !i64 {
-    const tr = @trunc(n);
-    if (!std.math.isFinite(tr) or tr < @as(f64, @floatFromInt(std.math.minInt(i64))) or tr >= @as(f64, @floatFromInt(std.math.maxInt(i64))) + 1.0) {
-        return error.RangeError;
-    }
-    return @intFromFloat(tr);
-}
-
 pub fn nativeConvToInt(ctx: VMContext, v: Value) !Value {
     _ = ctx;
     switch (v) {
         .int => |n| return .{ .int = n },
-        .float => |n| return .{ .int = try floatToIntChecked(n) },
+        .float => |n| return .{ .int = try common.safeI64FromFloat(n) },
         .rune => |r| return .{ .int = @intCast(r) },
         .boolean => |b| return .{ .int = if (b) 1 else 0 },
         .string => |s| {
             const n = common.parseFloat(s.bytes) orelse return error.TypeError;
-            return .{ .int = try floatToIntChecked(n) };
+            return .{ .int = try common.safeI64FromFloat(n) };
         },
         .object => |o| {
             // cast_int (the `int(...)` builtin) already delegates to
@@ -207,7 +196,7 @@ pub fn nativeConvToInt(ctx: VMContext, v: Value) !Value {
             if (o.* == .bigint) return .{ .int = try vmbigint.toInt(v) };
             const s = try vmstr.stringBytesFromObj(o);
             const n = common.parseFloat(s) orelse return error.TypeError;
-            return .{ .int = try floatToIntChecked(n) };
+            return .{ .int = try common.safeI64FromFloat(n) };
         },
         else => return error.TypeError,
     }

@@ -462,7 +462,7 @@ pub fn infixExpr(c: anytype, tt: TT) anyerror!void {
         if (c.check(.lbrace) and looksLikeStructLiteral(
             c,
         )) {
-            try structInstanceLitAfterValue(c, prop.line, null);
+            try structInstanceLitAfterValue(c, prop.line, null, null);
         }
         // Propagate named_type through field access (e.g. enum member reads).
         if (receiver_named_type) |nt| {
@@ -1094,7 +1094,26 @@ pub fn structInstanceLit(c: anytype, type_name: Token) !void {
 // through a cross-module field access), in which case this behaves exactly
 // as before: the runtime check in vm.zig's build_struct_instance handler
 // is the only one that runs.
-pub fn structInstanceLitAfterValue(c: anytype, line: u32, resolved_type: ?*value_mod.Object) !void {
+//
+// dunder_type_name: the qualified name to tag onto this literal's
+// ExprPrimInfo so a dunder method (__add__ etc.) declared on the type is
+// reachable when the literal is used directly in an expression (not read
+// back out of a variable first) — AND so checkFieldValueCompatibility can
+// validate this literal against a generic-typed struct field elsewhere
+// (its struct_t case matches a concrete instantiated name like "Box[int]"
+// against a field's bare-template-plus-generic_args spec). Always the
+// concrete instantiated qualified_name (same as resolved_type's own, when
+// present) — never the bare generic template name — because that
+// compatibility check needs the concrete form. A generic struct's methods
+// are nonetheless registered once, type-erased, under the *template's*
+// qualified name (e.g. "Box", from methodDecl's `qualifyTypeName(recv_type)`
+// where recv_type is the bare receiver name before its `[T]` is parsed), so
+// lookupDunderCallee (compiler.zig) has its own fallback that strips a
+// "[...]" suffix off this same name when the direct lookup misses — keeping
+// both consumers satisfied from one value instead of two conflicting ones.
+// Pass null when the caller has no dunder-eligible name at hand (e.g. the
+// cross-module field-access case) — same as before this parameter existed.
+pub fn structInstanceLitAfterValue(c: anytype, line: u32, resolved_type: ?*value_mod.Object, dunder_type_name: ?[]const u8) !void {
     try c.consume(.lbrace);
     var count: u8 = 0;
     var key_toks: [255]Token = undefined;
@@ -1127,10 +1146,19 @@ pub fn structInstanceLitAfterValue(c: anytype, line: u32, resolved_type: ?*value
         }
     }
     try c.consume(.rbrace);
+    // See structInstanceLit's identical comment above: without this, a
+    // dunder method declared on the struct is unreachable from a literal
+    // built directly through this path (generic instantiation, or a type
+    // alias of one) — this sibling function was missing it entirely.
     if (resolved_type) |t| {
         if (t.* == .struct_type) {
             try validateStructLiteralFieldNames(c, t.struct_type.fields, key_toks[0..count], val_infos[0..count], t.struct_type.name);
         }
+    }
+    if (dunder_type_name) |dtn| {
+        c.setCurrentExprPrimInfo(.{ .struct_type = dtn });
+    } else {
+        c.clearCurrentExprPrimInfo();
     }
     try c.cs.emit2(@intFromEnum(Op.build_struct_instance), count, line);
 }
@@ -1270,7 +1298,16 @@ pub fn varExpr(c: anytype, name: Token) !void {
             c,
         )) {
             const resolved_obj = if (c.registry.getCachedInstByQname(qname)) |e| e.obj else null;
-            try structInstanceLitAfterValue(c, name.line, resolved_obj);
+            // Use the CONCRETE instantiated qname (e.g. "Box[int]"), not the
+            // bare template name: checkFieldValueCompatibility's struct_t
+            // case needs this exact form (it strips the "[...]" itself when
+            // checking a field of generic type), and lookupDunderCallee
+            // (compiler.zig) now has its own fallback that strips this same
+            // suffix if the direct lookup misses, so both consumers of this
+            // ExprPrimInfo are satisfied without a second, differently-named
+            // value. See structInstanceLitAfterValue's doc comment.
+            const dunder_type_name: ?[]const u8 = if (resolved_obj != null and resolved_obj.?.* == .struct_type) qname else null;
+            try structInstanceLitAfterValue(c, name.line, resolved_obj, dunder_type_name);
         }
         return;
     }
@@ -1308,7 +1345,17 @@ pub fn varExpr(c: anytype, name: Token) !void {
                 // so build_struct_instance gets the type with the correct field definitions.
                 try c.cs.emitGetGlobal(alias.target_qname, name.line);
                 const resolved_obj = if (c.registry.getCachedInstByQname(alias.target_qname)) |e| e.obj else null;
-                try structInstanceLitAfterValue(c, name.line, resolved_obj);
+                // Unlike the bare-generic-instantiation case above, a type
+                // alias's methods ARE registered under the concrete
+                // instantiation's own qualified name (methodDecl resolves
+                // the alias receiver to ta.target_qname), so the resolved
+                // object's qualified_name is the correct dunder lookup key
+                // here. See structInstanceLitAfterValue's doc comment.
+                const dunder_type_name: ?[]const u8 = if (resolved_obj != null and resolved_obj.?.* == .struct_type)
+                    alias.target_qname
+                else
+                    null;
+                try structInstanceLitAfterValue(c, name.line, resolved_obj, dunder_type_name);
             } else {
                 try structInstanceLit(c, name);
             }

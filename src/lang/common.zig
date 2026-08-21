@@ -13,6 +13,25 @@ pub fn hashBytes(s: []const u8) u64 {
 
 const std = @import("std");
 
+// @intFromFloat is safety-checked illegal behavior (process abort) for NaN,
+// +/-Infinity, or any magnitude outside i64's range, so every float-to-int
+// conversion anywhere in the engine must reject those first. This exact
+// check was independently reimplemented in vm.zig, core.zig, cap_net.zig,
+// cap_ffi.zig, and bytes.zig — one of those copies (bytes.zig's argAsI64)
+// was missing the `isFinite` guard entirely, letting `bytes.u8(1e300)`
+// abort the whole host process with no capability required. Kept here as
+// the single shared implementation so a future fix (or bounds change)
+// lands once instead of needing to be copied to every call site again.
+pub fn safeI64FromFloat(n: f64) !i64 {
+    if (!std.math.isFinite(n) or
+        n < @as(f64, @floatFromInt(std.math.minInt(i64))) or
+        n >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) return error.RangeError;
+    const t = @trunc(n);
+    const as_i64: i64 = @intFromFloat(t);
+    if (@as(f64, @floatFromInt(as_i64)) != t) return error.RangeError;
+    return as_i64;
+}
+
 pub fn parseFloat(s: []const u8) ?f64 {
     if (s.len == 0) return null;
     var i: usize = 0;

@@ -211,6 +211,15 @@ pub const Runtime = struct {
         tasks_mod.setActive(&rt.task_state);
         rt.task_state.reset();
         rt.fs_mounts = fs_state.defaultState().*;
+        // fs_state.setActive was missing here — every OTHER per-runtime
+        // state (chunk/globals/heap/vm/tasks/net/http) gets pinned inline
+        // in this same function, just not this one. This still points at
+        // the stack-local `rt`, not its final address (same caveat as the
+        // net/http calls just below), so it's corrected like the rest by
+        // the first activate() call regardless; added purely so this
+        // function pins the same 8 things initWithConfig() does, instead
+        // of silently doing 7 of them.
+        fs_state.setActive(&rt.fs_mounts);
         rt.net_es = net_state.g_default_state;
         rt.net_es.initArrays(std.heap.page_allocator) catch @panic("OOM");
         rt.http_es = http_state.g_default_state;
@@ -1364,4 +1373,19 @@ test "Runtime.deinit is idempotent after a real init" {
     var rt = Runtime.init();
     rt.deinit();
     rt.deinit();
+}
+
+// Runtime.init() pins chunk/globals/heap/vm/tasks/net/http/fs_state inline,
+// same list activate() pins — but init() returns Runtime by value with no
+// guaranteed copy elision, so none of those pointers can be asserted to
+// resolve to the final rt's own fields (they target whatever address the
+// pre-return temporary happened to occupy). activate() is what makes the
+// pointers correct once rt has settled at its final address; this just
+// confirms activate() (which every real entry point calls before touching
+// state) actually does that for fs_state specifically.
+test "Runtime.activate() re-pins fs_state's active EngineState after init()" {
+    var rt = Runtime.init();
+    defer rt.deinit();
+    rt.activate();
+    try std.testing.expectEqual(&rt.fs_mounts, fs_state.activeState());
 }

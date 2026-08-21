@@ -23,6 +23,7 @@ const Object = vmod.Object;
 const MapEntry = vmod.MapEntry;
 const NativeFnId = @import("native_ids.zig").NativeFnId;
 const NativeFuncObj = @import("../value.zig").NativeFuncObj;
+const common = @import("../common.zig");
 
 pub const LibQualifiedName = "@cap_type:ffi.Lib";
 pub const CallableQualifiedName = "@cap_type:ffi.Callable";
@@ -213,10 +214,7 @@ fn callTrampoline(frame: *FfiCall) void {
 fn extractI64(v: Value) !i64 {
     return switch (v) {
         .int => |n| n,
-        .float => |n| blk: {
-            if (n < @as(f64, @floatFromInt(std.math.minInt(i64))) or n >= std.math.pow(f64, 2.0, 63.0)) return error.TypeError;
-            break :blk @as(i64, @intFromFloat(n));
-        },
+        .float => |n| common.safeI64FromFloat(n) catch return error.TypeError,
         else => return error.TypeError,
     };
 }
