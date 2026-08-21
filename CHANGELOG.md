@@ -4,6 +4,53 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-08-21
 
+### Fix — the two follow-ups flagged after the engine C-API race fix
+
+The previous fix (below) left two things flagged rather than fixed. Both
+addressed now:
+
+1. **`io.zig`'s trace state was the same non-thread-local pattern.** Fixed
+   by making `write_override`/`werr_override`/`read_override`/`g_trace_fn`/
+   `g_trace_userdata`/`g_trace_handle`/`g_trace_prev_line` all `threadlocal`,
+   matching `engine.zig`/`host_abi.zig`.
+
+2. **The pre-existing `engine_set_trace_fn fires per source line` failure
+   was real, not flaky — and not test-order pollution as first suspected.**
+   `engine.zig`'s native test runner (`tools/standalone_runner.zig`) runs
+   `builtin.test_functions` in fixed file-declaration order with no
+   shuffling, so the failure was 100% deterministic (confirmed via a debug
+   print showing the exact same `{1, 7, 1, 2, 3}` line sequence on every
+   run — not `{1, 2, 3}` as the test expected). Root cause: `dispatchTick`
+   (`vm.zig`) fired a trace event for every instruction while a trace
+   callback was active, including the embedded std-library bootstrap
+   bytecode every program executes at startup regardless of whether it
+   references `std` (defining `std.array.count` and friends as globals) —
+   the ghost `1` and `7` were two instructions from that bootstrap's own
+   `count` function definition (line 1 and line 7, `array.gengo`'s own
+   line numbers, colliding with the user script's line numbers in the
+   trace stream). Fixed by skipping trace firing for
+   `ip < chunk_state.std_script_code_end` (0, hence a no-op, when std
+   scripts weren't compiled in — e.g. the REPL) — a host's line-level
+   tracer should never see line numbers from a library implementation
+   detail the embedding user didn't write and can't map back to their own
+   source, whether that's the once-per-program bootstrap or a genuine call
+   into a std-library function implemented in Gengoscript itself.
+
+3. **`engine-api-test` (144 tests, including both fixes above and the
+   previous race-condition regression test) is now wired into `zig build
+   test`**, so it runs under every CI lane and the pre-push hook instead of
+   never running at all. This surfaced two more pre-existing tests
+   (`engine_call converts wires in the selected engine heap`,
+   `engine_call converts a large host-supplied wire array without
+   corrupting elements under heap pressure`) that hardcoded heap/object/
+   stack/frame/defer sizes tuned only to the default preset — both now
+   scale to whatever preset's ceiling `engine_init_with_config` actually
+   enforces, verified passing under `-Dpreset=stress`'s much tighter
+   limits specifically, not just the default preset.
+
+Verified under standard, `-Dpreset=stress`, and `-Dgc_stress=true` builds,
+each including the newly-wired `engine-api-test` step.
+
 ### Fix — cross-thread engine C-API race: wrong callback (and ctx) could serve the wrong engine
 
 Follow-up to an independent LLM's Tengo-vs-Gengo comparison, which flagged

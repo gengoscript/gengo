@@ -25,13 +25,22 @@ pub const WriteFn = *const fn (s: []const u8) void;
 pub const ReadFn = *const fn (buf: []u8, is_line: bool) isize;
 pub const TraceFn = *const fn (userdata: ?*anyopaque, handle: i32, line: i32, col: i32) callconv(.c) void;
 
-var write_override: ?WriteFn = null;
-var werr_override: ?WriteFn = null;
-var read_override: ?ReadFn = null;
-var g_trace_fn: ?TraceFn = null;
-var g_trace_userdata: ?*anyopaque = null;
-var g_trace_handle: i32 = -1;
-var g_trace_prev_line: u32 = 0xFFFF_FFFF;
+// threadlocal: set for the duration of one engine_run/engine_call by
+// engine.zig's pushEngineState/popEngineState, the same as
+// g_active_engine/write_callback/read_callback there and
+// native_host_call_fn/_ctx in host_abi.zig. As plain (non-threadlocal)
+// vars, two threads calling into different engines concurrently could
+// interleave these writes so one engine's trace/write/read calls fired
+// through the other engine's callback and userdata — see engine.zig's
+// g_active_engine doc comment for the full writeup and the two-thread
+// repro that caught the analogous bug in those other fields.
+threadlocal var write_override: ?WriteFn = null;
+threadlocal var werr_override: ?WriteFn = null;
+threadlocal var read_override: ?ReadFn = null;
+threadlocal var g_trace_fn: ?TraceFn = null;
+threadlocal var g_trace_userdata: ?*anyopaque = null;
+threadlocal var g_trace_handle: i32 = -1;
+threadlocal var g_trace_prev_line: u32 = 0xFFFF_FFFF;
 
 pub fn setWriteOverrides(w: WriteFn, e: WriteFn) void {
     write_override = w;

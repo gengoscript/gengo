@@ -451,6 +451,13 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_vm_safety.step);
     test_step.dependOn(&run_vm_value.step);
     test_step.dependOn(&run_embedding.step);
+    // engine.zig's own native test suite (engine_api_test, ~144 tests)
+    // was never wired into `test` — same class of gap as src/main.zig's
+    // tests above (found 2026-08-19). Discovered while adding a
+    // regression test for a real cross-thread engine C-API race
+    // (2026-08-21): the test caught the bug, but nothing in `zig build
+    // test` or the pre-push hook would ever have run it.
+    test_step.dependOn(&run_engine_api_tests.step);
     test_step.dependOn(&run_engine_runner.step);
     test_step.dependOn(&run_fuzz_runner.step);
     test_step.dependOn(&install_engine_debug.step);

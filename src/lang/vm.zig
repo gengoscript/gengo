@@ -2532,7 +2532,19 @@ noinline fn dispatchTick(ctx: VMContext) !u64 {
         if (ctx.vs.ops_budget_remaining == 0) return error.InstructionBudgetExceeded;
         ctx.vs.ops_budget_remaining -= 1;
     }
-    if (io.traceActive()) io.fireTrace(ctx.cs.lineAt(ctx.vs.ip), ctx.cs.colAt(ctx.vs.ip));
+    // std_script_code_end marks where the embedded std-library bootstrap
+    // bytecode ends and real user code begins (0 when std scripts weren't
+    // compiled in, e.g. the REPL, so this comparison is a no-op there).
+    // Every program executes the std-script bootstrap once at startup
+    // (defining std.array.count and friends as globals) regardless of
+    // whether it references std at all, and a call into a std-library
+    // function implemented in Gengoscript itself also runs bytecode in
+    // this same range — neither should surface line numbers from a
+    // library source the embedding host's user never wrote, and doing so
+    // was a real bug: a fresh engine's very first traced run fired two
+    // ghost events from the std bootstrap before the user script's own
+    // three lines, both silently corrupting the trace sequence.
+    if (io.traceActive() and ctx.vs.ip >= ctx.cs.std_script_code_end) io.fireTrace(ctx.cs.lineAt(ctx.vs.ip), ctx.cs.colAt(ctx.vs.ip));
     return dispatchGasInterval(ctx);
 }
 

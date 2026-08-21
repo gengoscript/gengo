@@ -1568,12 +1568,20 @@ test "engine_call rejects deeply nested host-supplied wire arguments instead of 
 }
 
 test "engine_call converts wires in the selected engine heap" {
+    // engine_init_with_config rejects any field above the build's compiled-in
+    // preset ceiling (engine_init_with_config's validateCeiling calls, by
+    // design — an embedder can't request more than the build allows). Clamp
+    // every field to the ambient ceiling so this test passes under every
+    // preset (found failing under -Dpreset=stress's 256KB/512-object/
+    // 128-stack/16-frame/32-defer ceilings, all below this test's original
+    // fixed request) instead of hardcoding values tuned to only the default
+    // preset.
     const config: InstanceConfig = .{
-        .heap_size_bytes = 1024 * 1024,
-        .max_objects = 2048,
-        .max_stack = 512,
-        .max_frames = 64,
-        .max_defers = 128,
+        .heap_size_bytes = @min(cfg.heap_size_bytes, 1024 * 1024),
+        .max_objects = @min(cfg.max_objects, 2048),
+        .max_stack = @min(cfg.max_stack, 512),
+        .max_frames = @min(cfg.max_frames, 64),
+        .max_defers = @min(cfg.max_defers, 128),
         .max_ops = -1,
         .allow_io = false,
     };
@@ -1592,7 +1600,14 @@ test "engine_call converts wires in the selected engine heap" {
     const second_engine = getEngine(second).?;
     second_engine.runtime.inner.activate();
     const second_ctx = vms.VMContext.fromActive();
-    var ballast: [60000]u8 = undefined;
+    // Scaled to the actual (possibly preset-clamped) heap size above, not a
+    // fixed 60000 — under -Dpreset=stress's 256KB ceiling, 14 * 60000-byte
+    // roots alone (840KB) would overflow the heap before the test's own
+    // assertions ever ran. /24 leaves comfortable headroom for the compiled
+    // function and chunk/globals overhead under every preset while still
+    // filling most of the heap (genuine pressure) under the default preset.
+    const ballast_size = config.heap_size_bytes / 24;
+    var ballast: [ballast_size]u8 = undefined;
     @memset(&ballast, 'b');
     var roots: [14]Value = undefined;
     for (&roots) |*root| {
@@ -1603,7 +1618,7 @@ test "engine_call converts wires in the selected engine heap" {
         for (roots) |_| second_ctx.vs.popTempRoot();
     }
 
-    var data: [60000]u8 = undefined;
+    var data: [ballast_size]u8 = undefined;
     @memset(&data, 'a');
     var arg: ValueWire = .{
         .tag = @intFromEnum(WireTag.string),
@@ -1641,12 +1656,16 @@ test "engine_call converts wires in the selected engine heap" {
 // is primarily a correctness check for large host-supplied wire arrays
 // under a small, tightly configured heap.
 test "engine_call converts a large host-supplied wire array without corrupting elements under heap pressure" {
+    // See the previous test's comment: engine_init_with_config rejects any
+    // field above the build's compiled-in preset ceiling, and every field
+    // here except heap_size_bytes exceeded -Dpreset=stress's ceilings
+    // (512/128/16/32 objects/stack/frames/defers).
     const config: InstanceConfig = .{
         .heap_size_bytes = 96 * 1024,
-        .max_objects = 2048,
-        .max_stack = 256,
-        .max_frames = 64,
-        .max_defers = 64,
+        .max_objects = @min(cfg.max_objects, 2048),
+        .max_stack = @min(cfg.max_stack, 256),
+        .max_frames = @min(cfg.max_frames, 64),
+        .max_defers = @min(cfg.max_defers, 64),
         .max_ops = -1,
         .allow_io = false,
     };
@@ -1669,7 +1688,11 @@ test "engine_call converts a large host-supplied wire array without corrupting e
     ;
     try std.testing.expectEqual(0, engine_run(h, @intFromPtr(src.ptr), src.len));
 
-    const N = 600;
+    // Each element becomes one converted managed-heap object, so N must
+    // stay well under the clamped max_objects ceiling too (600 exceeds
+    // -Dpreset=stress's 512-object ceiling on its own, before even counting
+    // the chunk/globals/compiled-function overhead sharing that budget).
+    const N = @min(600, config.max_objects / 2);
     var bufs: [N][16]u8 = undefined;
     var elem_wires: [N]ValueWire = undefined;
     for (0..N) |i| {
