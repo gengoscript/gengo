@@ -34,8 +34,8 @@ The relevant specifications include
 
 | Area | Current behaviour | Practical consequence |
 |---|---|---|
-| `--emit-gbc` source hash | The artifact records a hash of the source it was compiled from, but the CLI does not yet verify it before running the artifact. | Regenerate the `.gbc` whenever its `.gengo` source changes; do not rely on automatic invalidation. |
-| `--emit-gbc` on WASI | `--emit-gbc` is not supported in the WASI build. | Use the native CLI for GBC emission; run the artifact from WASI if needed. |
+| `gengo build` source hash | The artifact always records a hash of the source it was compiled from, but running a `.gbc` only verifies it against `--verify-source path` when that flag is given — a `.gbc` must remain runnable standalone with no source present, so verification can't be mandatory. | Pass `--verify-source path` when the original `.gengo` file is available and drift should fail loudly (`SourceGraphStale`); otherwise regenerate the `.gbc` by hand whenever its source changes. |
+| `gengo build` on WASI | `gengo build` is not supported in the WASI build. | Use the native CLI for GBC emission; run the artifact from WASI if needed. |
 
 ## Security and Operations
 

@@ -7,14 +7,27 @@ this checkout from source and have not installed it, substitute
 ## Invocation
 
 ```text
-gengo [options] [script.gengo]
+gengo [run|test|disasm|build|bundle] [options] [script.gengo]
 ```
 
-Run a source file:
+Run a source file — no subcommand needed, `run` is implicit:
 
 ```bash
 gengo hello.gengo
 ```
+
+`gengo run hello.gengo` does exactly the same thing; the subcommand is there
+for scripts/docs that want to be explicit, or to sit alongside `test`/
+`disasm`/`build` as a sibling. The other subcommands switch what "compile
+this script" actually does instead of running it normally:
+
+| Command | Meaning |
+|---|---|
+| `run <script>` | Compile and run (the default — also what a bare `gengo <script>` does). |
+| `test <script>` | Run top-level `test` blocks rather than ordinary script execution. A failed test exits unsuccessfully. |
+| `disasm <script>` | Compile and print a bytecode disassembly without running the script. This is an implementation-debugging aid, not language semantics. |
+| `build <script> -o path` | Compile the script and write a GBC (Gengo Bytecode Cache) artifact to `path`; do not run. Add `--lib` to write a linkable GBC module artifact instead. See below. |
+| `bundle` | Package a script and its imports into a zip archive. See `gengo bundle --help`. |
 
 Use `-e` or `--eval` for a short program. It cannot be combined with a script
 path:
@@ -29,14 +42,18 @@ script from standard input instead.
 
 ## Options
 
+Modifier flags below work identically with or without a subcommand — they
+apply the same way to `gengo script.gengo`, `gengo test script.gengo`,
+`gengo build script.gengo -o out.gbc`, and so on.
+
 | Option | Meaning |
 |---|---|
 | `--help`, `-h` | Print the option summary and exit. |
 | `--version` | Print the CLI version and exit. |
-| `--disasm` | Compile and print a bytecode disassembly without running the script. This is an implementation-debugging aid, not language semantics. |
-| `--emit-gbc path` | Compile the script and write a GBC (Gengo Bytecode Cache) artifact to `path`; do not run. See below. |
-| `--test` | Run top-level `test` blocks rather than ordinary script execution. A failed test exits unsuccessfully. |
-| `--profile` | With `--test`, print each block's instruction count and peak heap bytes/stack depth/live object count, plus a final peak-across-all-blocks summary line. Does not affect pass/fail behavior or the exit code. Forces per-instruction instruction counting on for the run, which costs real speed — a diagnostic aid, not something to leave on by default. |
+| `-o`, `--output path` | `build`-only: the artifact path to write. Required with `build`. |
+| `--lib` | `build`-only: write a linkable GBC module artifact instead of a normal one. |
+| `--verify-source path` | When running a `.gbc` directly, reject it (`SourceGraphStale`) if it no longer matches this source file. See below. |
+| `--profile` | `test`-only: print each block's instruction count and peak heap bytes/stack depth/live object count, plus a final peak-across-all-blocks summary line. Does not affect pass/fail behavior or the exit code. Forces per-instruction instruction counting on for the run, which costs real speed — a diagnostic aid, not something to leave on by default. |
 | `--cap name` | Enable one named capability. Repeat for several capabilities. See `capabilities.md`; no capability is enabled merely by importing it. `cap:ffi` requires `--cap ffi` and is native-CLI only. |
 | `--cap net=scope1,scope2` | Scope the `net` capability instead of granting it unscoped. Scopes are `dial` and `listen`, comma-separated (`--cap net=dial`, `--cap net=listen`, `--cap net=dial,listen`). Bare `--cap net` (no `=`) still means dial-only, unchanged from before scopes existed — upgrading never silently grants listen. This general `name=scope1,scope2` syntax is available for any capability that defines scopes, not just `net`. |
 | `--net-listen-allow pattern[:port]` | Add an allow rule to `net.listen`'s bind policy, which defaults to deny-all (see `security.md`). Repeatable. `pattern` accepts the same shapes as the embedding API's policy rules (`"*"`, exact IPv4/IPv6, CIDR, hostname wildcard); an optional `:port` suffix restricts to one port (bracket the pattern for a literal IPv6 address with a port, e.g. `"[::1]:8080"`). With no rules, `--cap net=listen` alone still makes `net.listen(...)` compile and import but refuse every call. |
@@ -78,13 +95,14 @@ for traversal, symlink, and host-platform limits.
 
 ## GBC (Bytecode Cache)
 
-`--emit-gbc path` compiles a script and writes a `.gbc` artifact instead of
-running it. A `.gbc` file passed as the script argument runs directly,
-skipping parsing and compilation entirely — the file is recognized by its
-magic bytes, not its extension, though naming it `.gbc` is the convention:
+`gengo build script.gengo -o path` compiles a script and writes a `.gbc`
+artifact instead of running it. A `.gbc` file passed as the script argument
+runs directly, skipping parsing and compilation entirely — the file is
+recognized by its magic bytes, not its extension, though naming it `.gbc` is
+the convention:
 
 ```bash
-gengo --emit-gbc app.gbc app.gengo    # compile once
+gengo build app.gengo -o app.gbc      # compile once
 gengo app.gbc                         # run the cached artifact, repeatedly
 ```
 
@@ -105,16 +123,19 @@ This is early — the current implementation covers a first milestone (see
   attached via ordinary bytecode execution rather than embedded as a
   constant, both work), or a generic function declaration (generic struct
   and variant types alone round-trip correctly; the rejection triggers only
-  when the script declares a `func` with type parameters). `--emit-gbc`
-  fails with a clear error naming the limitation rather than producing a
-  broken artifact.
-- The artifact records a hash of the source it was compiled from, but the
-  CLI does not yet check it against the current source file before running
-  a `.gbc` — nothing currently stops you from running a `.gbc` that no
-  longer matches its `.gengo` source. Treat a `.gbc` as something you
-  regenerate whenever its source changes, not as a transparent, self-invalidating
-  cache yet.
-- `--emit-gbc` is not currently supported when running the WASI build.
+  when the script declares a `func` with type parameters). `build` fails
+  with a clear error naming the limitation rather than producing a broken
+  artifact.
+- The artifact always records a hash of the source it was compiled from, but
+  running a `.gbc` doesn't check it by default — nothing stops you from
+  running a `.gbc` that no longer matches its `.gengo` source unless you ask
+  for the check. Pass `--verify-source path` (naming the original `.gengo`
+  file) when running a `.gbc` to opt in: a mismatch fails with
+  `SourceGraphStale` instead of silently executing stale bytecode.
+  ```bash
+  gengo --verify-source app.gengo app.gbc
+  ```
+- `gengo build` is not currently supported when running the WASI build.
 
 ## REPL
 

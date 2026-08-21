@@ -4,6 +4,39 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-08-21
 
+### Change — CLI restructured around subcommands (`run`/`test`/`disasm`/`build`)
+
+`--test`, `--disasm`, `--emit-gbc <path>`, and `--emit-gbc-module <path>` were
+flags dressed up as different modes (run vs. run-test-blocks vs.
+compile-only-and-disassemble vs. compile-only-and-write-an-artifact) rather
+than ordinary settings — the same shape `gengo bundle` (already a real
+subcommand) exists specifically to avoid. Replaced with explicit
+subcommands, mirroring `bundle`'s existing `argv[1]`-dispatch pattern but
+routed through the same flag-parsing loop so every modifier flag (`--heap`,
+`--cap`, `--mount`, `--modules`, `--max-ops`, `--backend`, `--no-fusion`,
+`--net-listen-allow`, `--net-dial-allow`, `--verify-source`) keeps working
+identically under every subcommand with no duplicated parsing logic:
+
+- `gengo <script.gengo>` (no subcommand) is unchanged — still the default,
+  implicit `run`.
+- `gengo run <script.gengo>` — new explicit alias for the same thing.
+- `gengo test <script.gengo> [--profile]` — replaces `--test`/`--profile`.
+- `gengo disasm <script.gengo>` — replaces `--disasm`.
+- `gengo build <script.gengo> -o <path> [--lib]` — replaces
+  `--emit-gbc <path>` (default) / `--emit-gbc-module <path>` (`--lib`).
+
+Hard break, not a soft deprecation: `--test`/`--disasm`/`--emit-gbc`/
+`--emit-gbc-module` are gone entirely. Hitting one now fails with a specific
+migration message (e.g. `--test was removed — use \`gengo test <script>\`
+instead`) rather than being silently misparsed as a script path — the
+existing arg loop had no "unknown flag" branch at all, so simply deleting
+these blocks would have made `gengo --test script.gengo` try to open a file
+literally named `--test`. `--help` and every doc/example referencing the
+removed flags (`docs/cli.md`, `docs/language.md`, `docs/changelog.md`,
+`docs/known-limitations.md`) updated in the same pass; no CI workflow,
+git hook, or tooling script used any of the four removed flags to begin
+with (confirmed via a full grep sweep before starting).
+
 ### Fix — engine_slots handle-allocation race, and opt-in GBC source-staleness verification
 
 Two follow-ups from digging further into the engine C-API concurrency work

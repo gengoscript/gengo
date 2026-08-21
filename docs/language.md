@@ -1918,10 +1918,10 @@ test "range check" {
 
 **Normal execution skips test blocks.** Running `gengo script.gengo` executes the script body but ignores all `test` blocks entirely. No test code runs, and no test infrastructure is paid for.
 
-**`--test` activates them:**
+**`gengo test` activates them:**
 
 ```bash
-gengo script.gengo --test
+gengo test script.gengo
 ```
 
 Each test block runs in order. Results go to stderr:

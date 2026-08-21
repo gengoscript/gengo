@@ -468,23 +468,45 @@ fn runBundle(args: []const []const u8) void {
     io.write("\n");
 }
 
+const CliMode = enum { run, @"test", disasm, build };
+
 fn runCli(argv: []const []const u8) void {
     if (argv.len > 1 and std.mem.eql(u8, argv[1], "bundle")) {
         runBundle(argv[2..]);
         return;
     }
+    // gengo <script.gengo> (no subcommand) stays sugar for `run` — every
+    // other mode (test/disasm/build) used to be a flag (--test/--disasm/
+    // --emit-gbc) dressed up as a mode switch; subcommands make the actual
+    // mode explicit instead of hiding it among ordinary modifier flags.
+    var mode: CliMode = .run;
+    var script_index: usize = 1;
+    if (argv.len > 1) {
+        if (std.mem.eql(u8, argv[1], "run")) {
+            mode = .run;
+            script_index = 2;
+        } else if (std.mem.eql(u8, argv[1], "test")) {
+            mode = .@"test";
+            script_index = 2;
+        } else if (std.mem.eql(u8, argv[1], "disasm")) {
+            mode = .disasm;
+            script_index = 2;
+        } else if (std.mem.eql(u8, argv[1], "build")) {
+            mode = .build;
+            script_index = 2;
+        }
+    }
     var script_path: ?[]const u8 = null;
     var script_name: []const u8 = "<stdin>";
-    var script_index: usize = 1;
     var eval_source: ?[]const u8 = null;
     var backend: vm.Policy.NativeBackend = .embedded;
     var max_ops: ?u64 = null;
-    var test_mode: bool = false;
+    const test_mode: bool = mode == .@"test";
     var profile_mode: bool = false;
-    var disasm_mode: bool = false;
+    const disasm_mode: bool = mode == .disasm;
     var no_fusion: bool = false;
-    var emit_gbc_path: ?[]const u8 = null;
-    var emit_gbc_module_path: ?[]const u8 = null;
+    var output_path: ?[]const u8 = null;
+    var build_lib: bool = false;
     var verify_source_path: ?[]const u8 = null;
     var cap_names: [16][]const u8 = undefined;
     var cap_count: usize = 0;
@@ -503,21 +525,26 @@ fn runCli(argv: []const []const u8) void {
             continue;
         }
         if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
-            io.write("Usage: gengo [options] [script.gengo]\n");
+            io.write("Usage: gengo [run|test|disasm|build|bundle] [options] [script.gengo]\n");
+            io.write("\n");
+            io.write("Commands:\n");
+            io.write("  run <script>       Compile and run (default; `gengo script.gengo` works\n");
+            io.write("                     with no subcommand at all)\n");
+            io.write("  test <script>      Run test blocks in the script\n");
+            io.write("  disasm <script>    Compile and print bytecode disassembly; do not run\n");
+            io.write("  build <script> -o <path>  Compile and write a GBC bytecode cache file;\n");
+            io.write("                     do not run. --lib writes a linkable GBC module\n");
+            io.write("                     artifact instead (gbc-spec.md sec 14); rejects a\n");
+            io.write("                     script that itself imports a .gbc\n");
+            io.write("  bundle             Package a script and its imports (see `gengo bundle --help`)\n");
             io.write("\n");
             io.write("Options:\n");
             io.write("  --help, -h         Show this help message\n");
             io.write("  --version          Print version and exit\n");
-            io.write("  --disasm           Compile and print bytecode disassembly; do not run\n");
             io.write("  --no-fusion        Skip the fusion pass; run on core ops only (for A/B testing)\n");
-            io.write("  --emit-gbc <path>  Compile and write a GBC bytecode cache file; do not run\n");
-            io.write("  --emit-gbc-module <path>  Compile as a linkable GBC module artifact\n");
-            io.write("                     (gbc-spec.md sec 14); rejects a script that itself\n");
-            io.write("                     imports a .gbc (single-level linking only)\n");
             io.write("  --verify-source <path>  When running a .gbc, reject it (SourceGraphStale)\n");
             io.write("                     if it no longer matches this source file\n");
-            io.write("  --test             Run test blocks in the script\n");
-            io.write("  --profile          With --test, report peak ops/heap/stack/objects per block\n");
+            io.write("  --profile          With `test`, report peak ops/heap/stack/objects per block\n");
             io.write("  --cap <name>       Enable a named capability (repeatable)\n");
             io.write("  --cap net=dial,listen  Scope the net capability (dial and/or listen)\n");
             io.write("  --net-listen-allow pattern[:port]  Allow net.listen to bind a matching\n");
@@ -710,32 +737,23 @@ fn runCli(argv: []const []const u8) void {
             script_index += 2;
             continue;
         }
-        if (std.mem.eql(u8, a, "--disasm")) {
-            disasm_mode = true;
-            script_index += 1;
-            continue;
-        }
         if (std.mem.eql(u8, a, "--no-fusion")) {
             no_fusion = true;
             script_index += 1;
             continue;
         }
-        if (std.mem.eql(u8, a, "--emit-gbc")) {
+        if (mode == .build and (std.mem.eql(u8, a, "-o") or std.mem.eql(u8, a, "--output"))) {
             if (script_index + 1 >= argv.len) {
-                io.werr("gengo: --emit-gbc requires a path argument\n");
+                io.werr("gengo: -o/--output requires a path argument\n");
                 die(1);
             }
-            emit_gbc_path = argv[script_index + 1];
+            output_path = argv[script_index + 1];
             script_index += 2;
             continue;
         }
-        if (std.mem.eql(u8, a, "--emit-gbc-module")) {
-            if (script_index + 1 >= argv.len) {
-                io.werr("gengo: --emit-gbc-module requires a path argument\n");
-                die(1);
-            }
-            emit_gbc_module_path = argv[script_index + 1];
-            script_index += 2;
+        if (mode == .build and std.mem.eql(u8, a, "--lib")) {
+            build_lib = true;
+            script_index += 1;
             continue;
         }
         if (std.mem.eql(u8, a, "--verify-source")) {
@@ -747,12 +765,7 @@ fn runCli(argv: []const []const u8) void {
             script_index += 2;
             continue;
         }
-        if (std.mem.eql(u8, a, "--test")) {
-            test_mode = true;
-            script_index += 1;
-            continue;
-        }
-        if (std.mem.eql(u8, a, "--profile")) {
+        if (mode == .@"test" and std.mem.eql(u8, a, "--profile")) {
             profile_mode = true;
             script_index += 1;
             continue;
@@ -771,6 +784,45 @@ fn runCli(argv: []const []const u8) void {
             eval_source = argv[script_index + 1];
             script_index += 2;
             continue;
+        }
+        // Anything starting with '-' that didn't match a flag above is an
+        // error, not a positional argument — without this check, a removed
+        // flag (see the migration hints below) or any other typo would
+        // silently fall through and get misparsed as the script path
+        // instead of failing loudly.
+        if (a.len > 0 and a[0] == '-') {
+            if (std.mem.eql(u8, a, "--test")) {
+                io.werr("gengo: --test was removed — use `gengo test <script>` instead\n");
+                die(1);
+            }
+            if (std.mem.eql(u8, a, "--disasm")) {
+                io.werr("gengo: --disasm was removed — use `gengo disasm <script>` instead\n");
+                die(1);
+            }
+            if (std.mem.eql(u8, a, "--emit-gbc")) {
+                io.werr("gengo: --emit-gbc was removed — use `gengo build <script> -o <path>` instead\n");
+                die(1);
+            }
+            if (std.mem.eql(u8, a, "--emit-gbc-module")) {
+                io.werr("gengo: --emit-gbc-module was removed — use `gengo build --lib <script> -o <path>` instead\n");
+                die(1);
+            }
+            if (std.mem.eql(u8, a, "-o") or std.mem.eql(u8, a, "--output")) {
+                io.werr("gengo: -o/--output is only valid with `gengo build`\n");
+                die(1);
+            }
+            if (std.mem.eql(u8, a, "--lib")) {
+                io.werr("gengo: --lib is only valid with `gengo build`\n");
+                die(1);
+            }
+            if (std.mem.eql(u8, a, "--profile")) {
+                io.werr("gengo: --profile is only valid with `gengo test`\n");
+                die(1);
+            }
+            io.werr("gengo: unknown flag: ");
+            io.werr(a);
+            io.werr("\n");
+            die(1);
         }
         // Positional argument: first one is the script path.
         if (script_path == null and eval_source == null) {
@@ -854,8 +906,8 @@ fn runCli(argv: []const []const u8) void {
 
     // A GBC artifact (magic bytes at offset 0) as the script argument runs
     // directly, skipping compilation entirely — the "ship a .gbc to a
-    // constrained host path. Takes priority over --disasm/--emit-gbc/
-    // --test, none of which apply to an already-compiled artifact.
+    // constrained host path. Takes priority over disasm/build/test mode,
+    // none of which apply to an already-compiled artifact.
     if (src.len >= 8 and std.mem.eql(u8, src[0..8], &gbc_writer.MAGIC)) {
         // Opt-in staleness check: a .gbc's source_graph_hash header field is
         // always recorded at compile time (gbc_writer.zig), but never
@@ -892,9 +944,14 @@ fn runCli(argv: []const []const u8) void {
         die(0);
     }
 
-    if (emit_gbc_path) |out_path| {
+    if (mode == .build and output_path == null) {
+        io.werr("gengo: `gengo build` requires -o/--output <path>\n");
+        die(1);
+    }
+    if (mode == .build and !build_lib) {
+        const out_path = output_path.?;
         if (comptime !build_opts.gbc) {
-            io.werr("gengo: --emit-gbc is not available in this build (-Dgbc=false)\n");
+            io.werr("gengo: `gengo build` is not available in this build (-Dgbc=false)\n");
             die(1);
         }
         runtime.compileOnly(src, script_arg, .filesystem) catch |err| {
@@ -929,7 +986,7 @@ fn runCli(argv: []const []const u8) void {
             die(1);
         };
         if (comptime builtin.os.tag == .wasi) {
-            io.werr("gengo: --emit-gbc is not supported on this target yet\n");
+            io.werr("gengo: `gengo build` is not supported on this target yet\n");
             die(1);
         }
         const gbc_io = std.Io.Threaded.global_single_threaded.io();
@@ -949,9 +1006,10 @@ fn runCli(argv: []const []const u8) void {
         die(0);
     }
 
-    if (emit_gbc_module_path) |out_path| {
+    if (mode == .build and build_lib) {
+        const out_path = output_path.?;
         if (comptime !build_opts.gbc) {
-            io.werr("gengo: --emit-gbc-module is not available in this build (-Dgbc=false)\n");
+            io.werr("gengo: `gengo build --lib` is not available in this build (-Dgbc=false)\n");
             die(1);
         }
         runtime.compileModuleOnly(src, script_arg, .filesystem) catch |err| {
@@ -1011,7 +1069,7 @@ fn runCli(argv: []const []const u8) void {
             die(1);
         };
         if (comptime builtin.os.tag == .wasi) {
-            io.werr("gengo: --emit-gbc-module is not supported on this target yet\n");
+            io.werr("gengo: `gengo build --lib` is not supported on this target yet\n");
             die(1);
         }
         const gbc_io = std.Io.Threaded.global_single_threaded.io();
