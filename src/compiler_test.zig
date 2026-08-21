@@ -4664,7 +4664,7 @@ test "gbc: task-type constants round-trip through Runtime.compileOnly + runFromG
 
     var rt3 = try setup();
     defer rt3.deinit();
-    try rt3.runFromGbc(bytes);
+    try rt3.runFromGbc(bytes, null);
 
     const result = try rt3.callGlobal("getGot", &.{});
     try std.testing.expectEqual(@as(i64, 15), result.int);
@@ -4861,7 +4861,7 @@ test "gbc: generic functions round-trip through Runtime.compileOnly + runFromGbc
 
     var rt3 = try setup();
     defer rt3.deinit();
-    try rt3.runFromGbc(bytes);
+    try rt3.runFromGbc(bytes, null);
 
     const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
     const actual = try vm.callGlobal(ctx, "f", &.{});
@@ -4905,7 +4905,7 @@ test "gbc: std.array.count (embedded-stdlib script_function) round-trips through
 
     var rt3 = try setup();
     defer rt3.deinit();
-    try rt3.runFromGbc(bytes);
+    try rt3.runFromGbc(bytes, null);
 
     const ctx: vm.VMContext = .{ .cs = rt3.chunk_state, .gs = &rt3.globals_state, .hs = &rt3.heap_state, .vs = &rt3.vm_state };
     const actual = try vm.callGlobal(ctx, "f", &.{});
@@ -5319,6 +5319,29 @@ test "gbc: reader accepts a .gbc when the expected source still matches" {
     globals.reset();
     heap.reset();
     try gbc_reader.read(bytes, chunk.g_state, heap.g_state, rt3.vm_state.allocator, "func f() int { return 1 }");
+}
+
+// The two tests directly above/below exercise gbc_reader.read()'s staleness
+// check at the low level; Runtime.runFromGbc's own expected_root_source
+// parameter (the plumbing the CLI's --verify-source flag uses) was never
+// itself covered end-to-end — this closes that gap.
+test "gbc: Runtime.runFromGbc's expected_root_source parameter accepts a match and rejects drift" {
+    const src = "func f() int { return 7 }";
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try rt2.compileOnly(src, "", .filesystem);
+    const bytes = try gbc_writer.write(rt2.chunk_state, std.testing.allocator, .{ .root_source = src });
+    defer std.testing.allocator.free(bytes);
+
+    var rt3 = try setup();
+    defer rt3.deinit();
+    try rt3.runFromGbc(bytes, src);
+    const result = try rt3.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 7), result.int);
+
+    var rt4 = try setup();
+    defer rt4.deinit();
+    try std.testing.expectError(error.SourceGraphStale, rt4.runFromGbc(bytes, "func f() int { return 8 }"));
 }
 
 // The tests below close a real gap found by a coverage audit: gbc_reader.zig

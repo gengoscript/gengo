@@ -4,6 +4,46 @@ This changelog tracks notable language/runtime changes by implementation date.
 
 ## 2026-08-21
 
+### Fix — engine_slots handle-allocation race, and opt-in GBC source-staleness verification
+
+Two follow-ups from digging further into the engine C-API concurrency work
+above.
+
+1. **`engine_slots` (the process-wide table of which engine handles exist)
+   had no lock.** Two threads calling `engine_init`/`engine_init_with_config`
+   concurrently could both observe the same slot free and both claim it,
+   each getting a handle that aliases the same underlying `Engine` —
+   confirmed via a real two-thread repro (32 concurrent `engine_init` calls
+   per thread) reliably producing duplicate handles and, more often than
+   not, crashing outright (both threads concurrently running `Runtime`
+   init/reset against the same chunk/globals/heap/task state). Worse than
+   the callback race fixed above — real memory corruption, not just
+   misrouting. Fixed with a plain atomic-based spinlock (this Zig version's
+   `std.Thread.Mutex` doesn't exist the way older Zig's did — its
+   synchronization primitives live under `std.Io.Mutex` and need an `Io`
+   context none of these plain C-ABI exports have at hand) guarding the
+   claim/release bookkeeping in `engine_init`, `engine_init_with_config`,
+   `engine_destroy`, and `getEngine`'s active-flag read. Added as a
+   permanent regression test (two threads racing 20 `engine_init` calls
+   each, asserting no handle from one thread's batch ever equals one from
+   the other's) — confirmed failing reliably before the fix, passing
+   reliably after.
+
+2. **A `.gbc` artifact's embedded `source_graph_hash` was never verified
+   against anything on the normal "run a `.gbc` file" path.**
+   `gbc_reader.zig`'s staleness check has existed for a while but needs the
+   caller to supply the source it expects to match — `Runtime.runFromGbc`
+   (reached from the CLI whenever the script argument is a `.gbc`) always
+   passed `null`, so a `.gbc` could silently drift from the source it was
+   compiled from and nothing would notice. Not fixable by making
+   verification mandatory (a `.gbc` is meant to be runnable standalone,
+   without its original source anywhere near it) — instead made opt-in:
+   `runFromGbc` now takes an `expected_root_source: ?[]const u8` parameter,
+   and a new CLI flag `--verify-source <path>` reads a source file and
+   threads it through, for callers who do keep the original source
+   alongside the `.gbc` and want drift rejected as `SourceGraphStale`
+   rather than silently executed. Default behavior (no flag) is unchanged.
+
 ### Fix — the two follow-ups flagged after the engine C-API race fix
 
 The previous fix (below) left two things flagged rather than fixed. Both

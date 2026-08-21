@@ -38,6 +38,9 @@ const ArgBufSize = 4096;
 const MaxInput = cfg.max_input_bytes;
 
 var g_src_buf: [MaxInput]u8 = undefined;
+// Separate from g_src_buf: when running a .gbc directly with --verify-source,
+// g_src_buf already holds the .gbc's own raw bytes by the time this is read.
+var g_verify_source_buf: [MaxInput]u8 = undefined;
 
 fn die(code: u32) noreturn {
     if (comptime builtin.os.tag == .wasi) {
@@ -482,6 +485,7 @@ fn runCli(argv: []const []const u8) void {
     var no_fusion: bool = false;
     var emit_gbc_path: ?[]const u8 = null;
     var emit_gbc_module_path: ?[]const u8 = null;
+    var verify_source_path: ?[]const u8 = null;
     var cap_names: [16][]const u8 = undefined;
     var cap_count: usize = 0;
     // Scratch storage for formatted "name.scope" tokens (e.g. "net.listen"),
@@ -510,6 +514,8 @@ fn runCli(argv: []const []const u8) void {
             io.write("  --emit-gbc-module <path>  Compile as a linkable GBC module artifact\n");
             io.write("                     (gbc-spec.md sec 14); rejects a script that itself\n");
             io.write("                     imports a .gbc (single-level linking only)\n");
+            io.write("  --verify-source <path>  When running a .gbc, reject it (SourceGraphStale)\n");
+            io.write("                     if it no longer matches this source file\n");
             io.write("  --test             Run test blocks in the script\n");
             io.write("  --profile          With --test, report peak ops/heap/stack/objects per block\n");
             io.write("  --cap <name>       Enable a named capability (repeatable)\n");
@@ -732,6 +738,15 @@ fn runCli(argv: []const []const u8) void {
             script_index += 2;
             continue;
         }
+        if (std.mem.eql(u8, a, "--verify-source")) {
+            if (script_index + 1 >= argv.len) {
+                io.werr("gengo: --verify-source requires a path argument\n");
+                die(1);
+            }
+            verify_source_path = argv[script_index + 1];
+            script_index += 2;
+            continue;
+        }
         if (std.mem.eql(u8, a, "--test")) {
             test_mode = true;
             script_index += 1;
@@ -842,7 +857,28 @@ fn runCli(argv: []const []const u8) void {
     // constrained host path. Takes priority over --disasm/--emit-gbc/
     // --test, none of which apply to an already-compiled artifact.
     if (src.len >= 8 and std.mem.eql(u8, src[0..8], &gbc_writer.MAGIC)) {
-        runtime.runFromGbc(src) catch |err| {
+        // Opt-in staleness check: a .gbc's source_graph_hash header field is
+        // always recorded at compile time (gbc_writer.zig), but never
+        // verified unless the caller supplies the source it expects to
+        // match — the default (no flag) preserves running a .gbc that has
+        // no source anywhere near it, the normal case for a precompiled
+        // artifact shipped standalone. --verify-source lets a caller who
+        // kept the original .gengo file alongside the .gbc (a dev workflow,
+        // or a deployment that wants drift detection) opt into rejecting a
+        // .gbc that no longer matches it, instead of silently executing
+        // stale bytecode.
+        const expected_root_source: ?[]const u8 = if (verify_source_path) |vsp| blk: {
+            const n = readSource(vsp, &g_verify_source_buf) catch |err| {
+                io.werr("gengo: --verify-source: could not read '");
+                io.werr(vsp);
+                io.werr("': ");
+                io.werr(@errorName(err));
+                io.werr("\n");
+                die(1);
+            };
+            break :blk g_verify_source_buf[0..n];
+        } else null;
+        runtime.runFromGbc(src, expected_root_source) catch |err| {
             io.werr("gengo: gbc load/run error: ");
             io.werr(@errorName(err));
             const emsg = runtime.vm_state.runtimeErrMsg();

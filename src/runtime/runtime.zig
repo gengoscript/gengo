@@ -597,7 +597,15 @@ pub const Runtime = struct {
     // place of compileProgram(). Test blocks are out of scope for this GBC
     // milestone (no test-name metadata is serialized yet), so this doesn't
     // support --test the way runPathWithProvider does.
-    pub fn runFromGbc(self: *Runtime, bytes: []const u8) !void {
+    // expected_root_source: when non-null, verified against the .gbc
+    // artifact's embedded source_graph_hash header field (gbc_reader.read's
+    // staleness check) — pass null (the previous, only behavior) when the
+    // caller has no copy of the original source to compare against, which
+    // is the normal case for a precompiled .gbc shipped standalone. Callers
+    // that keep the source alongside the .gbc (e.g. a dev workflow, or the
+    // CLI's own --verify-source flag) can opt into detecting drift between
+    // the two instead of silently executing stale bytecode.
+    pub fn runFromGbc(self: *Runtime, bytes: []const u8, expected_root_source: ?[]const u8) !void {
         if (self.vm_state.sleep_deadline_ns != null) return error.RuntimeSuspended;
         defer self.assertNoTempRootLeaks("Runtime.runFromGbc");
         self.last_runtime_line = 0;
@@ -607,7 +615,7 @@ pub const Runtime = struct {
         self.panic_depth = 0;
         self.reset();
         self.vm_state.setPolicy(self.policy);
-        try gbc_reader.read(bytes, self.chunk_state, &self.heap_state, self.vm_state.allocator, null);
+        try gbc_reader.read(bytes, self.chunk_state, &self.heap_state, self.vm_state.allocator, expected_root_source);
         if (!self.skip_fusion) try fusion_pass.fuse(self.chunk_state, self.vm_state.allocator);
 
         const install_ctx: vms.VMContext = .{ .cs = self.chunk_state, .gs = &self.globals_state, .hs = &self.heap_state, .vs = &self.vm_state };

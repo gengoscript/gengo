@@ -159,6 +159,42 @@ const EngineSlot = struct {
 };
 var engine_slots: [MaxEngines]EngineSlot = [_]EngineSlot{.{}} ** MaxEngines;
 
+// Guards the claim-a-free-slot/release-a-slot bookkeeping in
+// engine_init/engine_init_with_config/engine_destroy/getEngine — genuinely
+// shared across threads (unlike the threadlocal per-call state below),
+// since this table is the process-wide registry of which engine handles
+// exist at all. Without it, two threads calling engine_init concurrently
+// could both observe the same slot free and both claim it, each returning
+// a handle that aliases the same underlying Engine — confirmed via a real
+// two-thread repro (32 concurrent engine_init calls per thread) reliably
+// producing duplicate handles and, more often than not, crashing outright
+// (both threads concurrently running Runtime init/reset against the same
+// chunk/globals/heap/task state). Does not need to (and must not) cover
+// engine_run/engine_call's actual script execution: those already run
+// genuinely concurrently across engines via the threadlocal fix above, and
+// this table is only touched on that path for a single active-flag read
+// in getEngine(), which is cheap enough (once per call, not per
+// instruction) that locking it too costs nothing measurable.
+//
+// A plain spinlock via cmpxchg, not std.Thread.Mutex: this Zig version's
+// synchronization primitives (std.Io.Mutex) are built around its cooperative
+// Io/cancellation model and need an Io context to lock/unlock, which none
+// of engine_init/engine_destroy/getEngine have at hand (they're plain
+// synchronous C-ABI exports) — a spinlock needs nothing but the atomic
+// itself and is more than adequate for a rare, short critical section like
+// this one (engine setup/teardown, not a per-instruction hot path).
+var engine_slots_lock: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+fn lockEngineSlots() void {
+    while (engine_slots_lock.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
+        std.atomic.spinLoopHint();
+    }
+}
+
+fn unlockEngineSlots() void {
+    engine_slots_lock.store(false, .release);
+}
+
 const Engine = struct {
     runtime: api.Runtime,
     // Per-engine capability state — applied to the process globals during
@@ -353,6 +389,16 @@ fn sourceProviderFromLoader(engine: *Engine) ?api.SourceProvider {
 fn getEngine(handle: i32) ?*Engine {
     if (handle <= 0 or handle > MaxEngines) return null;
     const idx = @as(usize, @intCast(handle - 1));
+    // Locked, not a bare read: every WRITE to .active (engine_init,
+    // engine_init_with_config, engine_destroy) already runs under
+    // engine_slots_lock, so an unsynchronized read here would be a real
+    // data race in Zig's memory model, not just a theoretical one — this
+    // doesn't (and can't, without per-engine refcounting) prevent a
+    // concurrent engine_destroy from invalidating the returned pointer the
+    // instant after this function returns it; callers must still not
+    // destroy a handle while another thread might be mid-call on it.
+    lockEngineSlots();
+    defer unlockEngineSlots();
     if (!engine_slots[idx].active) return null;
     return &engine_slots[idx].engine;
 }
@@ -724,6 +770,8 @@ export fn gengo_engine_version() [*:0]const u8 {
 
 export fn engine_init() i32 {
     g_init_error_len = 0;
+    lockEngineSlots();
+    defer unlockEngineSlots();
     for (&engine_slots, 0..) |*slot, i| {
         if (!slot.active) {
             slot.engine.initInPlaceDefault() catch {
@@ -757,6 +805,8 @@ export fn engine_init_with_config(config_ptr: PtrInt) i32 {
     if (!validateCeiling("max_frames", config.max_frames, ceiling_frames)) return -3;
     if (!validateCeiling("max_defers", config.max_defers, ceiling_defers)) return -3;
 
+    lockEngineSlots();
+    defer unlockEngineSlots();
     for (&engine_slots, 0..) |*slot, i| {
         if (!slot.active) {
             slot.engine.initInPlaceWithConfig(config) catch {
@@ -772,6 +822,8 @@ export fn engine_init_with_config(config_ptr: PtrInt) i32 {
 
 export fn engine_destroy(handle: i32) void {
     const idx = if (handle > 0 and handle <= MaxEngines) @as(usize, @intCast(handle - 1)) else return;
+    lockEngineSlots();
+    defer unlockEngineSlots();
     // Guard on the active flag exactly like getEngine() does. Without this,
     // destroying a handle whose slot was never engine_init'd deinits garbage
     // (undefined) Engine memory — e.g. package_state.clearRegistry reading a
@@ -1936,6 +1988,45 @@ test "two engines' host-call callbacks stay isolated when engine_run/engine_call
     t1.join();
     t2.join();
     try std.testing.expect(!failed.load(.seq_cst));
+}
+
+// Worker for the slot-allocation race test below: engine_slots (the
+// process-wide table of which engine handles exist) had no lock, so two
+// threads calling engine_init concurrently could both observe the same
+// slot free and both claim it — confirmed via a real two-thread repro
+// (32 concurrent engine_init calls per thread) reliably producing
+// duplicate handles across threads and, more often than not, crashing
+// outright (both threads concurrently running Runtime init against the
+// same underlying chunk/globals/heap/task state). No destroy until after
+// both threads finish, so both threads' batches stay held open
+// simultaneously — maximizing overlap on the shrinking pool of free slots,
+// the actual condition the race needs.
+fn concurrentInitBatchWorker(handles: []i32, failed: *std.atomic.Value(bool)) void {
+    for (handles) |*h| {
+        h.* = engine_init();
+        if (h.* <= 0) failed.store(true, .seq_cst);
+    }
+}
+
+test "concurrent engine_init across threads never hands out the same handle twice" {
+    if (comptime is_wasm) return;
+    var failed = std.atomic.Value(bool).init(false);
+    var handlesA: [20]i32 = undefined;
+    var handlesB: [20]i32 = undefined;
+    const t1 = try std.Thread.spawn(.{}, concurrentInitBatchWorker, .{ &handlesA, &failed });
+    const t2 = try std.Thread.spawn(.{}, concurrentInitBatchWorker, .{ &handlesB, &failed });
+    t1.join();
+    t2.join();
+    defer {
+        for (handlesA) |h| if (h > 0) engine_destroy(h);
+        for (handlesB) |h| if (h > 0) engine_destroy(h);
+    }
+    try std.testing.expect(!failed.load(.seq_cst));
+    for (handlesA) |ha| {
+        for (handlesB) |hb| {
+            try std.testing.expect(ha != hb);
+        }
+    }
 }
 
 test "engine_call: recover() in defer intercepts panic" {
