@@ -1,14 +1,26 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const api = @import("runtime/api.zig");
 const Value = @import("lang/value.zig").Value;
 
-fn writeAll(fd: std.os.wasi.fd_t, s: []const u8) void {
-    var off: usize = 0;
-    while (off < s.len) {
-        var iov = [1]std.os.wasi.ciovec_t{.{ .base = s[off..].ptr, .len = s.len - off }};
-        var wrote: usize = 0;
-        if (std.os.wasi.fd_write(fd, &iov, iov.len, &wrote) != .SUCCESS or wrote == 0) return;
-        off += wrote;
+const is_wasm = builtin.target.cpu.arch.isWasm();
+
+fn writeAll(fd: i32, s: []const u8) void {
+    if (comptime is_wasm) {
+        var off: usize = 0;
+        while (off < s.len) {
+            var iov = [1]std.os.wasi.ciovec_t{.{ .base = s[off..].ptr, .len = s.len - off }};
+            var wrote: usize = 0;
+            if (std.os.wasi.fd_write(fd, &iov, iov.len, &wrote) != .SUCCESS or wrote == 0) return;
+            off += wrote;
+        }
+    } else {
+        var off: usize = 0;
+        while (off < s.len) {
+            const wrote = std.c.write(fd, s[off..].ptr, s.len - off);
+            if (wrote <= 0) return;
+            off += @intCast(wrote);
+        }
     }
 }
 
@@ -18,7 +30,8 @@ fn out(s: []const u8) void {
 
 fn fail(msg: []const u8) noreturn {
     writeAll(2, msg);
-    std.os.wasi.proc_exit(1);
+    if (comptime is_wasm) std.os.wasi.proc_exit(1);
+    std.process.exit(1);
 }
 
 fn makeRt(config: api.Config) *api.Runtime {
@@ -281,7 +294,7 @@ fn expectImportLoaderWithFallback() void {
     }
 }
 
-export fn _start() void {
+pub fn main() void {
     expectInitByValue();
     expectCompileError();
     expectRuntimeError();
@@ -292,5 +305,5 @@ export fn _start() void {
     expectRunPathWithSourceProvider();
     expectImportLoaderWithFallback();
     out("embedding-api OK\n");
-    std.os.wasi.proc_exit(0);
+    if (comptime is_wasm) std.os.wasi.proc_exit(0);
 }

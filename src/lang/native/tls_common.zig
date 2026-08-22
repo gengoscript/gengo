@@ -168,6 +168,57 @@ pub const FdWriter = struct {
     }
 };
 
+const testing = std.testing;
+
+test "monotonicMs is non-decreasing across calls" {
+    const first = monotonicMs();
+    const second = monotonicMs();
+    try testing.expect(second >= first);
+}
+
+test "ensureCaBundle loads the local OS trust store with no network" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    ensureCaBundle(io) catch |err| {
+        // No trust store available in this sandbox — not what we're testing.
+        if (err == error.FileNotFound) return error.SkipZigTest;
+        return err;
+    };
+    try testing.expect(g_ca_bundle_loaded);
+    try testing.expect(caBundleRef().map.count() > 0);
+}
+
+test "FdReader/FdWriter round-trip bytes through a real pipe" {
+    const fds = try std.Io.Threaded.pipe2(.{});
+    defer std.Io.Threaded.closeFd(fds[0]);
+    defer std.Io.Threaded.closeFd(fds[1]);
+
+    var write_buf: [256]u8 = undefined;
+    var writer = FdWriter.init(fds[1], &write_buf, 0);
+    try writer.interface.writeAll("hello pipe");
+    try writer.interface.flush();
+
+    var read_buf: [256]u8 = undefined;
+    var reader = FdReader.init(fds[0], &read_buf, 0);
+    var got: [10]u8 = undefined;
+    try reader.interface.readSliceAll(&got);
+    try testing.expectEqualStrings("hello pipe", &got);
+    try testing.expect(!reader.timed_out);
+}
+
+test "FdReader reports timed_out when its deadline has already passed" {
+    const fds = try std.Io.Threaded.pipe2(.{});
+    defer std.Io.Threaded.closeFd(fds[0]);
+    defer std.Io.Threaded.closeFd(fds[1]);
+
+    var read_buf: [64]u8 = undefined;
+    // Deadline already in the past — nothing was written to fds[1].
+    var reader = FdReader.init(fds[0], &read_buf, monotonicMs() - 1000);
+    if (reader.interface.takeByte()) |_| {
+        return error.TestFailed;
+    } else |_| {}
+    try testing.expect(reader.timed_out);
+}
+
 // ---------------------------------------------------------------------------
 // TlsConn — heap-allocated TLS connection state.
 //

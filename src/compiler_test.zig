@@ -18,6 +18,7 @@ const gbc_writer = @import("lang/gbc_writer.zig");
 const gbc_reader = @import("lang/gbc_reader.zig");
 const ct = @import("lang/compiler_types.zig");
 const net_state = @import("lang/native/net_state.zig");
+const http_state = @import("lang/native/http_state.zig");
 
 fn setup() !Runtime {
     var rt: Runtime = .{};
@@ -3207,6 +3208,98 @@ test "compiler: std.bytes decode family raises RangeError (not a crash) on a neg
         \\func f() int { return std.bytes.u32be_at(std.bytes.u32be(1234), -1) }
     );
     try std.testing.expectError(error.RangeError, rt.callGlobal("f", &.{}));
+}
+
+test "compiler: std.bytes pack/unpack round-trip, including the empty string" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\b := std.bytes
+        \\data := b.pack([1, 2, 255, 0])
+        \\assert b.len(data) == 4
+        \\assert b.at(data, 0) == 1
+        \\assert b.at(data, 1) == 2
+        \\assert b.at(data, 2) == 255
+        \\assert b.at(data, 3) == 0
+        \\arr := b.unpack(data)
+        \\assert std.core.len(arr) == 4
+        \\assert arr[0] == 1
+        \\assert arr[1] == 2
+        \\assert arr[2] == 255
+        \\assert arr[3] == 0
+        \\empty_arr := b.unpack("")
+        \\assert std.core.len(empty_arr) == 0
+    );
+}
+
+test "compiler: std.bytes.slice takes a zero-copy view within bounds and raises RangeError outside them" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\b := std.bytes
+        \\func validSlice() string { return b.slice(b.u8(0x41) + b.u8(0x42) + b.u8(0x43) + b.u8(0x44), 1, 3) }
+        \\func negFrom() string { return b.slice(b.u8(1) + b.u8(2), -1, 1) }
+        \\func toGreaterLen() string { return b.slice(b.u8(1) + b.u8(2), 0, 5) }
+        \\func fromGreaterTo() string { return b.slice(b.u8(1) + b.u8(2), 2, 1) }
+    );
+    const valid = try rt.callGlobal("validSlice", &.{});
+    try std.testing.expectEqualStrings("BC", try vms.asStringValue(valid));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("negFrom", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("toGreaterLen", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("fromGreaterTo", &.{}));
+}
+
+test "compiler: std.bytes.repeat concatenates n copies and rejects a negative count" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\b := std.bytes
+        \\func validRepeat() string { return b.repeat(b.u8(0x41), 3) }
+        \\func negRepeat() string { return b.repeat(b.u8(0x41), -1) }
+    );
+    const valid = try rt.callGlobal("validRepeat", &.{});
+    try std.testing.expectEqualStrings("AAA", try vms.asStringValue(valid));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("negRepeat", &.{}));
+}
+
+test "compiler: std.bytes little-endian encoders round-trip through their _at decoders" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\b := std.bytes
+        \\data := b.u16le(0x1234) + b.u32le(0x89ABCDEF) + b.u64le(0x0102030405060708) + b.f32le(3.5) + b.f64le(2.5)
+        \\assert b.u16le_at(data, 0) == 0x1234
+        \\assert b.u32le_at(data, 2) == 0x89ABCDEF
+        \\assert b.u64le_at(data, 6) == 0x0102030405060708
+        \\assert b.f32le_at(data, 14) == 3.5
+        \\assert b.f64le_at(data, 18) == 2.5
+    );
+}
+
+test "compiler: std.bytes index_of/contains/starts_with/ends_with/count/replace" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\b := std.bytes
+        \\data := b.pack([65, 66, 67, 66, 67])
+        \\assert b.index_of(data, b.pack([66, 67])) == 1
+        \\assert b.index_of(data, b.pack([90])) == -1
+        \\assert b.contains(data, b.pack([67, 66])) == true
+        \\assert b.contains(data, b.pack([90])) == false
+        \\assert b.starts_with(data, b.pack([65, 66])) == true
+        \\assert b.starts_with(data, b.pack([66, 67])) == false
+        \\assert b.ends_with(data, b.pack([66, 67])) == true
+        \\assert b.ends_with(data, b.pack([65, 66])) == false
+        \\assert b.count(data, b.pack([66, 67])) == 2
+        \\assert b.count(data, "") == 6
+        \\assert b.replace(data, b.pack([66, 67]), b.pack([88])) == "AXX"
+        \\assert b.replace(data, "", b.pack([90])) == "ABCBC"
+    );
 }
 
 // A pattern that can match zero characters (a bare anchor, or a nullable
@@ -6559,6 +6652,239 @@ test "cap:net listen/accept: real POSIX bind+accept+read+write roundtrip" {
     client.join();
     try std.testing.expect(connected.load(.seq_cst));
     try std.testing.expect(echoed.load(.seq_cst));
+}
+
+// cap_fs.zig's dispatch functions (unlike cap:net/cap:http) return a single
+// value, not a (value, err) pair — a failure is an uncaught runtime error,
+// not a value-level error. Exercised end-to-end against a real temp
+// directory (no fake/mock needed, filesystem I/O is cheap and hermetic).
+test "cap:fs read/write/exists/list/delete/mkdir round-trip through a real temp directory" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{"fs"},
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(tmp_path);
+
+    switch (rt.run(
+        \\std := import("std")
+        \\fs := import("cap:fs")
+        \\func doWrite() bool {
+        \\    fs.write("root/hello.txt", "hello-content")
+        \\    return true
+        \\}
+        \\func doExists() bool {
+        \\    return fs.exists("root/hello.txt")
+        \\}
+        \\func doRead() string {
+        \\    return fs.read("root/hello.txt")
+        \\}
+        \\func doMkdir() bool {
+        \\    fs.mkdir("root/subdir")
+        \\    return true
+        \\}
+        \\func doList() int {
+        \\    return std.core.len(fs.list("root"))
+        \\}
+        \\func doDelete() bool {
+        \\    fs.delete("root/hello.txt")
+        \\    return true
+        \\}
+        \\func doExistsAfterDelete() bool {
+        \\    return fs.exists("root/hello.txt")
+        \\}
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+
+    // Registered after run(), same reasoning as the cap:http handler tests
+    // below: run()/compile can re-pin the process-wide active-runtime
+    // pointers, which would wipe out mounts set before that pin lands.
+    try rt.setFsMounts(&.{.{ .name = "root", .real = tmp_path }});
+
+    switch (rt.call("doWrite", &.{})) {
+        .ok => |v| try std.testing.expect(v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    switch (rt.call("doExists", &.{})) {
+        .ok => |v| try std.testing.expect(v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    switch (rt.call("doRead", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("hello-content", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    switch (rt.call("doMkdir", &.{})) {
+        .ok => |v| try std.testing.expect(v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    switch (rt.call("doList", &.{})) {
+        .ok => |v| try std.testing.expect(v.int >= 1),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    switch (rt.call("doDelete", &.{})) {
+        .ok => |v| try std.testing.expect(v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    switch (rt.call("doExistsAfterDelete", &.{})) {
+        .ok => |v| try std.testing.expect(!v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+}
+
+// cap:http's dispatch() validates the fetch() options map (method/body/
+// timeout_ms/headers types, and the opts argument itself) before ever
+// calling http_state.httpFetch — so these TypeError branches need no
+// network or registered handler at all to exercise.
+test "cap:http fetch rejects malformed options before any dispatch to httpFetch" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{"http"},
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    switch (rt.run(
+        \\http := import("cap:http")
+        \\func badMethod() { r, e := http.fetch("http://x.invalid/", {"method": 123}) }
+        \\func badBody() { r, e := http.fetch("http://x.invalid/", {"body": 123}) }
+        \\func badTimeout() { r, e := http.fetch("http://x.invalid/", {"timeout_ms": "nope"}) }
+        \\func badHeaders() { r, e := http.fetch("http://x.invalid/", {"headers": 123}) }
+        \\func badOpts() { r, e := http.fetch("http://x.invalid/", 123) }
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+
+    const names = [_][]const u8{ "badMethod", "badBody", "badTimeout", "badHeaders", "badOpts" };
+    for (names) |name| {
+        switch (rt.call(name, &.{})) {
+            .runtime_error => |e| try std.testing.expectEqual(error.TypeError, e.kind),
+            .ok => return error.ExpectedTypeError,
+        }
+    }
+}
+
+// Fake host handler for cap:http tests below: fills in a canned response
+// and records what it was called with, so http.get/post/fetch's full
+// success path (options marshaling in cap_http.zig's dispatch, request/
+// response marshaling in http_state.zig's httpFetchHost, struct-building
+// in buildResponseStruct) runs for real with no network involved.
+const FakeCapHttpState = struct {
+    seen_method: [16]u8 = undefined,
+    seen_method_len: usize = 0,
+    seen_body_len: c_int = -1,
+    seen_header_count: c_int = -1,
+    resp_status: c_int = 200,
+    resp_body: []const u8 = "",
+    resp_key: [:0]const u8 = "x-resp",
+    resp_value: [:0]const u8 = "resp-value",
+    resp_keys_arr: [1][*:0]const u8 = undefined,
+    resp_vals_arr: [1][*:0]const u8 = undefined,
+};
+
+fn fakeCapHttpHandler(req: *const http_state.GengoHttpRequest, out: *http_state.GengoHttpResponse, userdata: ?*anyopaque) callconv(.c) c_int {
+    const st: *FakeCapHttpState = @ptrCast(@alignCast(userdata.?));
+    const method = std.mem.span(req.method);
+    @memcpy(st.seen_method[0..method.len], method);
+    st.seen_method_len = method.len;
+    st.seen_body_len = req.body_len;
+    st.seen_header_count = req.headers.count;
+
+    out.status = st.resp_status;
+    out.body = st.resp_body.ptr;
+    out.body_len = @intCast(st.resp_body.len);
+    st.resp_keys_arr[0] = st.resp_key.ptr;
+    st.resp_vals_arr[0] = st.resp_value.ptr;
+    out.headers = .{ .keys = &st.resp_keys_arr, .values = &st.resp_vals_arr, .count = 1 };
+    return 0;
+}
+
+test "cap:http get/post/fetch build a full Response struct through a fake host handler" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{"http"},
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    var state = FakeCapHttpState{ .resp_status = 201, .resp_body = "hello-body" };
+
+    switch (rt.run(
+        \\http := import("cap:http")
+        \\func doGet() int {
+        \\    r, err := http.get("http://x.invalid/")
+        \\    if err != null { return -1 }
+        \\    return r.status
+        \\}
+        \\func doGetBody() string {
+        \\    r, err := http.get("http://x.invalid/")
+        \\    if err != null { return "ERR" }
+        \\    return r.body
+        \\}
+        \\func doGetOk() bool {
+        \\    r, err := http.get("http://x.invalid/")
+        \\    if err != null { return false }
+        \\    return r.ok
+        \\}
+        \\func doPost() int {
+        \\    r, err := http.post("http://x.invalid/", "payload")
+        \\    if err != null { return -1 }
+        \\    return r.status
+        \\}
+        \\func doFetchHeader() string {
+        \\    r, err := http.fetch("http://x.invalid/", {"method": "PUT", "headers": {"X-Foo": "bar"}})
+        \\    if err != null { return "ERR" }
+        \\    return r.headers["x-resp"]
+        \\}
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+
+    // Registered after run() (which activates rt's own state), not before:
+    // run()/compile can re-pin the process-wide active-runtime pointers,
+    // which would otherwise wipe out a handler registered on a stale
+    // pre-activation pointer (same class of pitfall as this file's setup()
+    // doc comment describes for Runtime returned by value).
+    http_state.setHttpHandler(fakeCapHttpHandler, @ptrCast(&state));
+    defer http_state.resetHandler();
+
+    switch (rt.call("doGet", &.{})) {
+        .ok => |v| try std.testing.expectEqual(@as(i64, 201), v.int),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    try std.testing.expectEqualStrings("GET", state.seen_method[0..state.seen_method_len]);
+
+    switch (rt.call("doGetBody", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("hello-body", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+
+    switch (rt.call("doGetOk", &.{})) {
+        .ok => |v| try std.testing.expect(v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+
+    switch (rt.call("doPost", &.{})) {
+        .ok => |v| try std.testing.expectEqual(@as(i64, 201), v.int),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    try std.testing.expectEqualStrings("POST", state.seen_method[0..state.seen_method_len]);
+    try std.testing.expectEqual(@as(c_int, 7), state.seen_body_len); // "payload".len == 7
+
+    switch (rt.call("doFetchHeader", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("resp-value", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    try std.testing.expectEqualStrings("PUT", state.seen_method[0..state.seen_method_len]);
+    try std.testing.expectEqual(@as(c_int, 1), state.seen_header_count);
 }
 
 // math.abs(minInt(i64)) used to panic: @abs on i64 returns a u64 magnitude

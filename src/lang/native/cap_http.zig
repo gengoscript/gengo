@@ -221,6 +221,70 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
     }
 }
 
+const testing = std.testing;
+
+test "registerResponseType/buildResponseStruct build a Response instance with the expected fields" {
+    const Runtime = @import("../../runtime/runtime.zig").Runtime;
+    var rt: Runtime = undefined;
+    try rt.initWithPolicy(.{ .allow_io = false });
+    defer rt.deinit();
+    const ctx = vms.VMContext.fromActive();
+
+    // Before registration, buildResponseStruct can't find the type.
+    var empty_headers = std.StringHashMap([]const u8).init(std.heap.page_allocator);
+    defer empty_headers.deinit();
+    try testing.expectError(error.CapabilityError, buildResponseStruct(ctx, 200, "x", empty_headers, true));
+
+    try registerResponseType(ctx, ctx.gs);
+    // Registering twice must be a no-op, not an error.
+    try registerResponseType(ctx, ctx.gs);
+
+    var headers = std.StringHashMap([]const u8).init(std.heap.page_allocator);
+    defer headers.deinit();
+    try headers.put("x-a", "1");
+
+    const resp = try buildResponseStruct(ctx, 201, "body-text", headers, true);
+    try testing.expect(resp == .object);
+    const fields = resp.object.struct_instance.fields;
+    try testing.expectEqual(@as(usize, 4), fields.len);
+    try testing.expectEqualStrings("status", fields[0].key.string.bytes);
+    try testing.expectEqual(@as(i64, 201), fields[0].value.int);
+    try testing.expectEqualStrings("body", fields[1].key.string.bytes);
+    try testing.expectEqualStrings("body-text", try vms.asStringValue(fields[1].value));
+    try testing.expectEqualStrings("headers", fields[2].key.string.bytes);
+    const hdr_entries = try vms.asMapSlice(fields[2].value.object);
+    try testing.expectEqual(@as(usize, 1), hdr_entries.len);
+    try testing.expectEqualStrings("x-a", try vms.asStringValue(hdr_entries[0].key));
+    try testing.expectEqualStrings("1", try vms.asStringValue(hdr_entries[0].value));
+    try testing.expectEqualStrings("ok", fields[3].key.string.bytes);
+    try testing.expectEqual(true, fields[3].value.boolean);
+}
+
+test "pushOkPair/pushErrPair push a two-element [value, null] / [null, error] array" {
+    const Runtime = @import("../../runtime/runtime.zig").Runtime;
+    var rt: Runtime = undefined;
+    try rt.initWithPolicy(.{ .allow_io = false });
+    defer rt.deinit();
+    const ctx = vms.VMContext.fromActive();
+
+    try pushOkPair(ctx, .{ .int = 42 });
+    const ok_arr = try ctx.vs.vmPop();
+    try testing.expect(ok_arr == .object);
+    const ok_items = try vms.asArraySlice(ok_arr.object);
+    try testing.expectEqual(@as(usize, 2), ok_items.len);
+    try testing.expectEqual(@as(i64, 42), ok_items[0].int);
+    try testing.expect(ok_items[1] == .null);
+
+    try pushErrPair(ctx, "http.get: {s}: {s}", .{ "http://x/", "Timeout" });
+    const err_arr = try ctx.vs.vmPop();
+    try testing.expect(err_arr == .object);
+    const err_items = try vms.asArraySlice(err_arr.object);
+    try testing.expectEqual(@as(usize, 2), err_items.len);
+    try testing.expect(err_items[0] == .null);
+    try testing.expect(err_items[1] == .error_value);
+    try testing.expectEqualStrings("http.get: http://x/: Timeout", err_items[1].error_value.bytes);
+}
+
 pub fn registerResponseType(ctx: VMContext, gs: *globals.State) !void {
     if (gs.has(ResponseTypeQualifiedName)) return;
 

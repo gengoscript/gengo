@@ -552,7 +552,7 @@ pub fn build(b: *std.Build) void {
     fuzz_native_mod.addImport("build_options", build_opts_mod);
     fuzz_native_mod.addImport("runtime_config", runtime_config_mod);
     fuzz_native_mod.link_libc = true;
-    const fuzz_native_exe = b.addExecutable(.{ .name = "fuzz-runner-native", .root_module = fuzz_native_mod });
+    const fuzz_native_exe = b.addExecutable(.{ .name = "fuzz-runner-native", .root_module = fuzz_native_mod, .use_llvm = if (coverage_opt) true else null });
     const run_fuzz_native = b.addRunArtifact(fuzz_native_exe);
     const fuzz_native_step = b.step("fuzz-native", "Run fuzz tests natively (native codegen paths)");
     fuzz_native_step.dependOn(&run_fuzz_native.step);
@@ -567,7 +567,7 @@ pub fn build(b: *std.Build) void {
     vm_value_native_mod.addImport("build_options", build_opts_mod);
     vm_value_native_mod.addImport("runtime_config", runtime_config_mod);
     vm_value_native_mod.link_libc = true;
-    const vm_value_native_exe = b.addExecutable(.{ .name = "vm-value-runner-native", .root_module = vm_value_native_mod });
+    const vm_value_native_exe = b.addExecutable(.{ .name = "vm-value-runner-native", .root_module = vm_value_native_mod, .use_llvm = if (coverage_opt) true else null });
     const run_vm_value_native = b.addRunArtifact(vm_value_native_exe);
 
     const vm_safety_native_mod = b.createModule(.{
@@ -578,8 +578,23 @@ pub fn build(b: *std.Build) void {
     vm_safety_native_mod.addImport("build_options", build_opts_mod);
     vm_safety_native_mod.addImport("runtime_config", runtime_config_mod);
     vm_safety_native_mod.link_libc = true;
-    const vm_safety_native_exe = b.addExecutable(.{ .name = "vm-safety-runner-native", .root_module = vm_safety_native_mod });
+    const vm_safety_native_exe = b.addExecutable(.{ .name = "vm-safety-runner-native", .root_module = vm_safety_native_mod, .use_llvm = if (coverage_opt) true else null });
     const run_vm_safety_native = b.addRunArtifact(vm_safety_native_exe);
+
+    // Native build of the embedding-API smoke runner (src/embedding_runner.zig
+    // was WASM-only until 2026-08-22; made portable the same way
+    // vm_safety_runner.zig/vm_value_runner.zig already were, purely so it can
+    // be instrumented with kcov here — the WASM build is unaffected).
+    const embedding_runner_native_mod = b.createModule(.{
+        .root_source_file = b.path("src/embedding_runner.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    embedding_runner_native_mod.addImport("build_options", build_opts_mod);
+    embedding_runner_native_mod.addImport("runtime_config", runtime_config_mod);
+    embedding_runner_native_mod.link_libc = true;
+    const embedding_runner_native_exe = b.addExecutable(.{ .name = "embedding-runner-native", .root_module = embedding_runner_native_mod, .use_llvm = if (coverage_opt) true else null });
+    const run_embedding_runner_native = b.addRunArtifact(embedding_runner_native_exe);
 
     const vm_native_step = b.step("vm-native", "Run VM value/safety runners natively");
     vm_native_step.dependOn(&run_vm_value_native.step);
@@ -588,6 +603,7 @@ pub fn build(b: *std.Build) void {
     // so they must hold on native codegen too.
     test_step.dependOn(&run_vm_value_native.step);
     test_step.dependOn(&run_vm_safety_native.step);
+    test_step.dependOn(&run_embedding_runner_native.step);
 
     const fuzz_gc_stress_step = b.step("fuzz-gc-stress", "Run fuzz tests under gc_stress (GC on every allocation)");
     fuzz_gc_stress_step.dependOn(&run_fuzz_gc_stress.step);
@@ -642,11 +658,27 @@ pub fn build(b: *std.Build) void {
     const embedding_frag_runner = b.addExecutable(.{
         .name = "embedding-frag-runner",
         .root_module = embedding_frag_runner_mod,
+        .use_llvm = if (coverage_opt) true else null,
     });
     const run_embedding_frag = b.addRunArtifact(embedding_frag_runner);
     if (b.args) |args| run_embedding_frag.addArgs(args);
     const embedding_frag_step = b.step("embedding-frag", "Run the long-lived embedding fragmentation harness");
     embedding_frag_step.dependOn(&run_embedding_frag.step);
+
+    // These native runners exercise source files (compiler/VM/embedding-API
+    // paths) that the 8 addTest binaries above never reach on their own, so
+    // feeding them through kcov too closes real coverage gaps, not just
+    // duplicate numbers.
+    for ([_]*std.Build.Step.Compile{
+        fuzz_native_exe,
+        vm_value_native_exe,
+        vm_safety_native_exe,
+        embedding_runner_native_exe,
+        embedding_frag_runner,
+    }) |runner_exe| {
+        const install = b.addInstallArtifact(runner_exe, coverage_dest);
+        coverage_bin_step.dependOn(&install.step);
+    }
 
     const run_chaos = b.addRunArtifact(test_runner_exe);
     run_chaos.step.dependOn(&install_native.step);

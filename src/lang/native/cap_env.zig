@@ -146,3 +146,80 @@ fn pushEmptyMap(ctx: VMContext) !void {
     obj.* = .{ .map = &[_]MapEntry{} };
     try ctx.vs.vmPush(.{ .object = obj });
 }
+
+const testing = std.testing;
+
+test "envGet returns interned value for an existing key, empty string for an empty value, null for a missing key" {
+    const Runtime = @import("../../runtime/runtime.zig").Runtime;
+    var rt: Runtime = undefined;
+    rt.initWithPolicy(.{ .allow_io = false }) catch return error.TestFailed;
+    defer rt.deinit();
+    const ctx = VMContext.fromActive();
+
+    const entries = [_:null]?[*:0]const u8{ "FOO=bar", "EMPTY=" };
+    setEnvironBlock(.{ .slice = &entries });
+    defer setEnvironBlock(.empty);
+
+    const found = try envGet(ctx, "FOO");
+    try testing.expect(found == .string);
+    try testing.expectEqualStrings("bar", found.string.bytes);
+
+    const empty_val = try envGet(ctx, "EMPTY");
+    try testing.expect(empty_val == .string);
+    try testing.expectEqualStrings("", empty_val.string.bytes);
+
+    const missing = try envGet(ctx, "NOPE");
+    try testing.expect(missing == .null);
+}
+
+test "envListPosix pushes an empty map when the environ block is empty" {
+    const Runtime = @import("../../runtime/runtime.zig").Runtime;
+    var rt: Runtime = undefined;
+    rt.initWithPolicy(.{ .allow_io = false }) catch return error.TestFailed;
+    defer rt.deinit();
+    const ctx = VMContext.fromActive();
+
+    setEnvironBlock(.empty);
+    defer setEnvironBlock(.empty);
+
+    try envListPosix(ctx);
+    const pushed = try ctx.vs.vmPop();
+    try testing.expect(pushed == .object);
+    try testing.expect(pushed.object.* == .map);
+    try testing.expectEqual(@as(usize, 0), pushed.object.map.len);
+}
+
+test "envListPosix pushes a populated map matching the environ block, including an empty-value entry" {
+    const Runtime = @import("../../runtime/runtime.zig").Runtime;
+    var rt: Runtime = undefined;
+    rt.initWithPolicy(.{ .allow_io = false }) catch return error.TestFailed;
+    defer rt.deinit();
+    const ctx = VMContext.fromActive();
+
+    const entries = [_:null]?[*:0]const u8{ "FOO=bar", "EMPTY=" };
+    setEnvironBlock(.{ .slice = &entries });
+    defer setEnvironBlock(.empty);
+
+    try envListPosix(ctx);
+    const pushed = try ctx.vs.vmPop();
+    try testing.expect(pushed == .object);
+    try testing.expect(pushed.object.* == .map_managed);
+    const map_entries = pushed.object.map_managed;
+    try testing.expectEqual(@as(usize, 2), map_entries.len);
+
+    var found_foo = false;
+    var found_empty = false;
+    for (map_entries) |entry| {
+        try testing.expect(entry.key == .string);
+        try testing.expect(entry.value == .string);
+        if (std.mem.eql(u8, entry.key.string.bytes, "FOO")) {
+            try testing.expectEqualStrings("bar", entry.value.string.bytes);
+            found_foo = true;
+        } else if (std.mem.eql(u8, entry.key.string.bytes, "EMPTY")) {
+            try testing.expectEqualStrings("", entry.value.string.bytes);
+            found_empty = true;
+        }
+    }
+    try testing.expect(found_foo);
+    try testing.expect(found_empty);
+}

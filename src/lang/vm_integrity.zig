@@ -95,3 +95,31 @@ pub fn fatal(ctx: VMContext, err: anyerror) noreturn {
         },
     );
 }
+
+const testing = std.testing;
+
+test "capture snapshots a fresh VM's zeroed state and reports the unknown opcode" {
+    const Runtime = @import("../runtime/runtime.zig").Runtime;
+    var rt: Runtime = undefined;
+    rt.initWithPolicy(.{ .allow_io = false }) catch return error.TestFailed;
+    defer rt.deinit();
+    const ctx = VMContext.fromActive();
+
+    const snap = capture(ctx);
+    try testing.expectEqual(@as(usize, 0), snap.ip);
+    try testing.expectEqualStrings("?", snap.opcode);
+    try testing.expectEqual(@as(usize, 0), snap.frame_depth);
+    try testing.expectEqual(@as(usize, 0), snap.stack_top);
+    try testing.expectEqual(@as(usize, 0), snap.temp_root_depth);
+}
+
+test "isIntegrityError classifies VM-integrity errors as true and everything else as false" {
+    try testing.expect(isIntegrityError(error.InvalidChunkShape));
+    try testing.expect(isIntegrityError(error.CorruptedObjectHandle));
+    try testing.expect(isIntegrityError(error.BadTempRootDiscipline));
+    try testing.expect(isIntegrityError(error.ImpossibleOpcodeState));
+    try testing.expect(isIntegrityError(error.GCInvariantFailure));
+
+    try testing.expect(!isIntegrityError(error.TypeError));
+    try testing.expect(!isIntegrityError(error.OutOfMemory));
+}
