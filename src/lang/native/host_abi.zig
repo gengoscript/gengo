@@ -326,3 +326,174 @@ test "wireNumberToU64 honors FLAG_INTEGER encoding" {
     const w = makeWire(.number, host_abi.FLAG_INTEGER, @bitCast(@as(i64, 42)), 0);
     try std.testing.expectEqual(@as(u64, 42), try wireNumberToU64(w));
 }
+
+test "checkCallStatus maps every CallStatus variant to its documented outcome" {
+    try checkCallStatus(.ok);
+    try std.testing.expectError(error.HostNativeUnsupported, checkCallStatus(.unsupported));
+    try std.testing.expectError(error.PermissionDenied, checkCallStatus(.denied));
+    try std.testing.expectError(error.HostNativeBadArgs, checkCallStatus(.bad_args));
+    try std.testing.expectError(error.HostNativeFailed, checkCallStatus(.failed));
+}
+
+test "wireNumberToU64 rejects negative, non-integral, and too-large floats, and non-number wires" {
+    const ok_w = makeWire(.number, 0, @bitCast(@as(f64, 7.0)), 0);
+    try std.testing.expectEqual(@as(u64, 7), try wireNumberToU64(ok_w));
+
+    const negative_w = makeWire(.number, 0, @bitCast(@as(f64, -1.0)), 0);
+    try std.testing.expectError(error.HostNativeBadReturnValue, wireNumberToU64(negative_w));
+
+    const fractional_w = makeWire(.number, 0, @bitCast(@as(f64, 1.5)), 0);
+    try std.testing.expectError(error.HostNativeBadReturnValue, wireNumberToU64(fractional_w));
+
+    const huge_w = makeWire(.number, 0, @bitCast(@as(f64, 1e30)), 0);
+    try std.testing.expectError(error.HostNativeBadReturnValue, wireNumberToU64(huge_w));
+
+    const non_number_w = nullWire();
+    try std.testing.expectError(error.HostNativeBadReturnType, wireNumberToU64(non_number_w));
+}
+
+// wireFromValue/valueFromWire back every scalar Value variant with a direct
+// bit/pointer encoding (see wireFromValueDepth's switch) — round-trip each
+// one and confirm the decoded Value matches the original.
+test "wireFromValue/valueFromWire round-trip every scalar Value variant" {
+    const Runtime = @import("../../runtime/runtime.zig").Runtime;
+    var rt: Runtime = undefined;
+    rt.initWithPolicy(.{ .allow_io = false }) catch return error.TestFailed;
+    defer rt.deinit();
+
+    const ctx = VMContext.fromActive();
+
+    {
+        const w = try wireFromValue(ctx, .null);
+        const v = try valueFromWire(ctx, w);
+        try std.testing.expect(v == .null);
+    }
+    {
+        const w = try wireFromValue(ctx, .{ .boolean = true });
+        const v = try valueFromWire(ctx, w);
+        try std.testing.expect(v == .boolean);
+        try std.testing.expectEqual(true, v.boolean);
+    }
+    {
+        const w = try wireFromValue(ctx, .{ .int = -12345 });
+        const v = try valueFromWire(ctx, w);
+        try std.testing.expect(v == .int);
+        try std.testing.expectEqual(@as(i64, -12345), v.int);
+    }
+    {
+        const w = try wireFromValue(ctx, .{ .float = 3.5 });
+        const v = try valueFromWire(ctx, w);
+        try std.testing.expect(v == .float);
+        try std.testing.expectEqual(@as(f64, 3.5), v.float);
+    }
+    {
+        const w = try wireFromValue(ctx, .{ .rune = 0x1F600 });
+        const v = try valueFromWire(ctx, w);
+        try std.testing.expect(v == .rune);
+        try std.testing.expectEqual(@as(u21, 0x1F600), v.rune);
+    }
+    {
+        // .decimal is a raw i64 carrier at the Value level (no scale info
+        // here — see known-limitations.md on ABI v2 decimal wire values).
+        const w = try wireFromValue(ctx, .{ .decimal = 12345 });
+        const v = try valueFromWire(ctx, w);
+        try std.testing.expect(v == .decimal);
+        try std.testing.expectEqual(@as(i64, 12345), v.decimal);
+    }
+    {
+        const s = try ctx.cs.internStr("hello");
+        const w = try wireFromValue(ctx, .{ .string = s });
+        const v = try valueFromWire(ctx, w);
+        try std.testing.expectEqualStrings("hello", try vms.asStringValue(v));
+    }
+    {
+        const msg = try ctx.cs.internStr("boom");
+        const w = try wireFromValue(ctx, .{ .error_value = msg });
+        const v = try valueFromWire(ctx, w);
+        try std.testing.expect(v == .error_value);
+        try std.testing.expectEqualStrings("boom", v.error_value.bytes);
+    }
+}
+
+test "wireFromValue/valueFromWire round-trip an array and a map with nested elements" {
+    const Runtime = @import("../../runtime/runtime.zig").Runtime;
+    var rt: Runtime = undefined;
+    rt.initWithPolicy(.{ .allow_io = false }) catch return error.TestFailed;
+    defer rt.deinit();
+
+    const ctx = VMContext.fromActive();
+
+    {
+        const arr = try vmgc.allocTempRootedManagedValueArray(ctx, 3);
+        defer ctx.vs.popTempRoot();
+        arr.set(0, .{ .int = 1 });
+        arr.set(1, try vmgc.makeDynString(ctx, "two"));
+        arr.set(2, .null);
+
+        const w = try wireFromValue(ctx, .{ .object = arr.obj });
+        const v = try valueFromWire(ctx, w);
+        try std.testing.expect(v == .object);
+        const items = try vms.asArraySlice(v.object);
+        try std.testing.expectEqual(@as(usize, 3), items.len);
+        try std.testing.expect(items[0] == .int);
+        try std.testing.expectEqual(@as(i64, 1), items[0].int);
+        try std.testing.expectEqualStrings("two", try vms.asStringValue(items[1]));
+        try std.testing.expect(items[2] == .null);
+    }
+    {
+        const map_obj = try vmgc.allocTempRooted(ctx, .{ .map = &[_]MapEntry{} });
+        defer ctx.vs.popTempRoot();
+        const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, 1);
+        map_obj.* = .{ .map_managed = entries };
+        entries[0] = .{ .key = try vmgc.makeDynString(ctx, "a"), .value = .{ .int = 1 } };
+
+        const w = try wireFromValue(ctx, .{ .object = map_obj });
+        const v = try valueFromWire(ctx, w);
+        try std.testing.expect(v == .object);
+        const map_entries = try vms.asMapSlice(v.object);
+        try std.testing.expectEqual(@as(usize, 1), map_entries.len);
+        try std.testing.expectEqualStrings("a", try vms.asStringValue(map_entries[0].key));
+        try std.testing.expect(map_entries[0].value == .int);
+        try std.testing.expectEqual(@as(i64, 1), map_entries[0].value.int);
+    }
+}
+
+// A real compiled variant instance goes through wireFromValueDepth's
+// .object.variant_value prong or its top-level .inline_variant prong
+// depending on Zig's own small-payload inlining heuristic — either way, the
+// wire form is always the same 2-entry {"tag": name, "value": payload} map,
+// so this round-trips correctly regardless of which representation the
+// compiler picked, exercising whichever prong actually fired.
+test "wireFromValue/valueFromWire round-trip a compiled variant instance" {
+    const api = @import("../../runtime/api.zig");
+    var rt = try api.Runtime.init(.{ .allow_io = false, .allocator = std.testing.allocator });
+    defer rt.deinit();
+
+    switch (rt.run(
+        \\type Shape variant {
+        \\    Circle(radius int),
+        \\    Rect { w int, h int },
+        \\}
+        \\func makeCircle() Shape { return Shape.Circle(5) }
+        \\func makeRect() Shape { return Shape.Rect{w: 2, h: 3} }
+    )) {
+        .ok => {},
+        else => return error.TestFailed,
+    }
+
+    const ctx = VMContext.fromActive();
+
+    inline for (.{ "makeCircle", "makeRect" }) |name| {
+        const shape_val = switch (rt.call(name, &.{})) {
+            .ok => |v| v,
+            .runtime_error => return error.TestFailed,
+        };
+        const w = try wireFromValue(ctx, shape_val);
+        const v = try valueFromWire(ctx, w);
+        try std.testing.expect(v == .object);
+        const entries = try vms.asMapSlice(v.object);
+        try std.testing.expectEqual(@as(usize, 2), entries.len);
+        try std.testing.expectEqualStrings("tag", try vms.asStringValue(entries[0].key));
+        try std.testing.expectEqualStrings("value", try vms.asStringValue(entries[1].key));
+    }
+}

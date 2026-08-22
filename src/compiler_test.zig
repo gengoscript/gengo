@@ -6914,6 +6914,128 @@ test "compiler: std.math abs/max/min raise RangeError (not a crash) at the i64 b
     try std.testing.expectEqual(@as(i64, 3), min_n.int);
 }
 
+// std.math's trig/log/exp/root family: each computes a correct value in its
+// normal domain, and (where math.zig's dispatch adds an explicit guard, or
+// the result comes back non-finite) raises RangeError instead of returning
+// NaN/Inf silently.
+test "compiler: std.math trig/log/exp/root functions compute correct values and raise RangeError at their domain boundaries" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func acosOk() float { return std.math.acos(0.5) }
+        \\func acosBoundary() float { return std.math.acos(1.0) }
+        \\func acosOob() float { return std.math.acos(2.0) }
+        \\func asinOk() float { return std.math.asin(0.5) }
+        \\func asinOob() float { return std.math.asin(-2.0) }
+        \\func atanOk() float { return std.math.atan(1.0) }
+        \\func cosOk() float { return std.math.cos(0.0) }
+        \\func sinOk() float { return std.math.sin(0.0) }
+        \\func tanOk() float { return std.math.tan(0.0) }
+        \\func cbrtOk() float { return std.math.cbrt(27.0) }
+        \\func ceilOk() float { return std.math.ceil(1.2) }
+        \\func floorOk() float { return std.math.floor(1.8) }
+        \\func roundOk() float { return std.math.round(1.5) }
+        \\func truncOk() float { return std.math.trunc(1.9) }
+        \\func coshOk() float { return std.math.cosh(0.0) }
+        \\func sinhOk() float { return std.math.sinh(0.0) }
+        \\func tanhOk() float { return std.math.tanh(0.0) }
+        \\func expOk() float { return std.math.exp(0.0) }
+        \\func exp2Ok() float { return std.math.exp2(3.0) }
+        \\func logOk() float { return std.math.log(1.0) }
+        \\func logZero() float { return std.math.log(0.0) }
+        \\func logNeg() float { return std.math.log(-1.0) }
+        \\func log10Ok() float { return std.math.log10(100.0) }
+        \\func log10Zero() float { return std.math.log10(0.0) }
+        \\func log2Ok() float { return std.math.log2(8.0) }
+        \\func log2Neg() float { return std.math.log2(-1.0) }
+        \\func sqrtOk() float { return std.math.sqrt(4.0) }
+        \\func sqrtNeg() float { return std.math.sqrt(-1.0) }
+        \\func powOk() float { return std.math.pow(2.0, 10.0) }
+        \\func powNonFinite() float { return std.math.pow(0.0, -1.0) }
+    );
+
+    const tol = 1e-9;
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0471975511965979), (try rt.callGlobal("acosOk", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), (try rt.callGlobal("acosBoundary", &.{})).float, tol);
+    try std.testing.expectError(error.RangeError, rt.callGlobal("acosOob", &.{}));
+    try std.testing.expectApproxEqAbs(@as(f64, 0.5235987755982989), (try rt.callGlobal("asinOk", &.{})).float, tol);
+    try std.testing.expectError(error.RangeError, rt.callGlobal("asinOob", &.{}));
+    try std.testing.expectApproxEqAbs(@as(f64, 0.7853981633974483), (try rt.callGlobal("atanOk", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), (try rt.callGlobal("cosOk", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), (try rt.callGlobal("sinOk", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), (try rt.callGlobal("tanOk", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), (try rt.callGlobal("cbrtOk", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), (try rt.callGlobal("ceilOk", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), (try rt.callGlobal("floorOk", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), (try rt.callGlobal("roundOk", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), (try rt.callGlobal("truncOk", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), (try rt.callGlobal("coshOk", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), (try rt.callGlobal("sinhOk", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), (try rt.callGlobal("tanhOk", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), (try rt.callGlobal("expOk", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 8.0), (try rt.callGlobal("exp2Ok", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), (try rt.callGlobal("logOk", &.{})).float, tol);
+    try std.testing.expectError(error.RangeError, rt.callGlobal("logZero", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("logNeg", &.{}));
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), (try rt.callGlobal("log10Ok", &.{})).float, tol);
+    try std.testing.expectError(error.RangeError, rt.callGlobal("log10Zero", &.{}));
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), (try rt.callGlobal("log2Ok", &.{})).float, tol);
+    try std.testing.expectError(error.RangeError, rt.callGlobal("log2Neg", &.{}));
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), (try rt.callGlobal("sqrtOk", &.{})).float, tol);
+    try std.testing.expectError(error.RangeError, rt.callGlobal("sqrtNeg", &.{}));
+    try std.testing.expectApproxEqAbs(@as(f64, 1024.0), (try rt.callGlobal("powOk", &.{})).float, tol);
+    try std.testing.expectError(error.RangeError, rt.callGlobal("powNonFinite", &.{}));
+}
+
+// std.math's remaining dispatch branches: clamp, hypot, atan2, is_nan/is_inf,
+// sign, nan, and mod (including its DivisionByZero guard).
+test "compiler: std.math clamp/hypot/atan2/is_nan/is_inf/sign/nan/mod cover their normal and edge-case behavior" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func clampMid() float { return std.math.clamp(5.0, 0.0, 10.0) }
+        \\func clampLow() float { return std.math.clamp(-5.0, 0.0, 10.0) }
+        \\func clampHigh() float { return std.math.clamp(15.0, 0.0, 10.0) }
+        \\func hypotOk() float { return std.math.hypot(3.0, 4.0) }
+        \\func atan2Ok() float { return std.math.atan2(1.0, 1.0) }
+        \\func isNanTrue() bool { return std.math.is_nan(std.math.nan()) }
+        \\func isNanFalse() bool { return std.math.is_nan(1.0) }
+        \\func isInfPos() bool { return std.math.is_inf(std.math.inf, 0) }
+        \\func isInfNeg() bool { return std.math.is_inf(-std.math.inf, 0) }
+        \\func isInfFalse() bool { return std.math.is_inf(1.0, 0) }
+        \\func isInfSignPos() bool { return std.math.is_inf(std.math.inf, 1) }
+        \\func isInfSignPosMismatch() bool { return std.math.is_inf(-std.math.inf, 1) }
+        \\func isInfSignNeg() bool { return std.math.is_inf(-std.math.inf, -1) }
+        \\func signPos() float { return std.math.sign(5.5) }
+        \\func signNeg() float { return std.math.sign(-5.5) }
+        \\func signZero() float { return std.math.sign(0.0) }
+        \\func modOk() float { return std.math.mod(7.5, 2.0) }
+        \\func modByZero() float { return std.math.mod(1.0, 0.0) }
+    );
+
+    const tol = 1e-9;
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), (try rt.callGlobal("clampMid", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), (try rt.callGlobal("clampLow", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), (try rt.callGlobal("clampHigh", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), (try rt.callGlobal("hypotOk", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.7853981633974483), (try rt.callGlobal("atan2Ok", &.{})).float, tol);
+    try std.testing.expect((try rt.callGlobal("isNanTrue", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("isNanFalse", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isInfPos", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isInfNeg", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("isInfFalse", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isInfSignPos", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("isInfSignPosMismatch", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isInfSignNeg", &.{})).boolean);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), (try rt.callGlobal("signPos", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, -1.0), (try rt.callGlobal("signNeg", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), (try rt.callGlobal("signZero", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.5), (try rt.callGlobal("modOk", &.{})).float, tol);
+    try std.testing.expectError(error.DivisionByZero, rt.callGlobal("modByZero", &.{}));
+}
+
 // std.conv.to_int used to feed NaN/Infinity/out-of-range floats straight
 // into @intFromFloat, which panics on all three instead of raising a
 // catchable error. Also covers the string path (common.parseFloat), where

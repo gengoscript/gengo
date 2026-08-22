@@ -70,6 +70,169 @@ fn fieldTypeAltEqual(a: FieldTypeAlt, b: FieldTypeAlt) bool {
     };
 }
 
+const testing = std.testing;
+const FieldTypeTag = value_mod.FieldTypeTag;
+
+fn scalarAlt(t: FieldTypeTag) FieldTypeAlt {
+    return .{ .typ = t };
+}
+
+// A comptime-keyed static backing array (same trick as value.zig's
+// staticSS): scalarSpec must not return a slice into a stack-local array,
+// since FieldTypeSpec.alts is a plain slice with no lifetime of its own —
+// the caller's copy would dangle the moment this function returns.
+fn scalarSpec(comptime t: FieldTypeTag) FieldTypeSpec {
+    const S = struct {
+        var arr = [_]FieldTypeAlt{.{ .typ = t }};
+    };
+    return .{ .alts = &S.arr };
+}
+
+test "findFieldIndex returns the matching field's index, or null on no match" {
+    const fields = [_]StructFieldSpec{
+        .{ .name = "a", .typ = scalarSpec(.int) },
+        .{ .name = "b", .typ = scalarSpec(.string) },
+    };
+    try testing.expectEqual(@as(?usize, 0), findFieldIndex(&fields, "a"));
+    try testing.expectEqual(@as(?usize, 1), findFieldIndex(&fields, "b"));
+    try testing.expectEqual(@as(?usize, null), findFieldIndex(&fields, "missing"));
+}
+
+test "fieldTypeAltEqual: struct_t/interface_t/named_t/variant_t compare by name" {
+    try testing.expect(fieldTypeAltEqual(.{ .typ = .struct_t, .struct_name = "Foo" }, .{ .typ = .struct_t, .struct_name = "Foo" }));
+    try testing.expect(!fieldTypeAltEqual(.{ .typ = .struct_t, .struct_name = "Foo" }, .{ .typ = .struct_t, .struct_name = "Bar" }));
+
+    try testing.expect(fieldTypeAltEqual(.{ .typ = .interface_t, .interface_name = "Shape" }, .{ .typ = .interface_t, .interface_name = "Shape" }));
+    try testing.expect(!fieldTypeAltEqual(.{ .typ = .interface_t, .interface_name = "Shape" }, .{ .typ = .interface_t, .interface_name = "Other" }));
+
+    try testing.expect(fieldTypeAltEqual(.{ .typ = .named_t, .named_name = "UserId" }, .{ .typ = .named_t, .named_name = "UserId" }));
+    try testing.expect(!fieldTypeAltEqual(.{ .typ = .named_t, .named_name = "UserId" }, .{ .typ = .named_t, .named_name = "OrderId" }));
+
+    try testing.expect(fieldTypeAltEqual(.{ .typ = .variant_t, .named_name = "Shape" }, .{ .typ = .variant_t, .named_name = "Shape" }));
+
+    // Different tags are never equal even with matching names.
+    try testing.expect(!fieldTypeAltEqual(.{ .typ = .struct_t, .struct_name = "Foo" }, .{ .typ = .interface_t, .interface_name = "Foo" }));
+}
+
+test "fieldTypeAltEqual: array/map alts compare nested elem/key/val specs, including null-vs-null and null-vs-some" {
+    const int_spec = scalarSpec(.int);
+    const str_spec = scalarSpec(.string);
+
+    try testing.expect(fieldTypeAltEqual(.{ .typ = .array, .elem_spec = null }, .{ .typ = .array, .elem_spec = null }));
+    try testing.expect(!fieldTypeAltEqual(.{ .typ = .array, .elem_spec = null }, .{ .typ = .array, .elem_spec = int_spec }));
+    try testing.expect(fieldTypeAltEqual(.{ .typ = .array, .elem_spec = int_spec }, .{ .typ = .array, .elem_spec = int_spec }));
+    try testing.expect(!fieldTypeAltEqual(.{ .typ = .array, .elem_spec = int_spec }, .{ .typ = .array, .elem_spec = str_spec }));
+
+    try testing.expect(fieldTypeAltEqual(
+        .{ .typ = .map, .key_spec = str_spec, .val_spec = int_spec },
+        .{ .typ = .map, .key_spec = str_spec, .val_spec = int_spec },
+    ));
+    try testing.expect(!fieldTypeAltEqual(
+        .{ .typ = .map, .key_spec = str_spec, .val_spec = int_spec },
+        .{ .typ = .map, .key_spec = str_spec, .val_spec = str_spec },
+    ));
+    try testing.expect(!fieldTypeAltEqual(
+        .{ .typ = .map, .key_spec = null, .val_spec = int_spec },
+        .{ .typ = .map, .key_spec = str_spec, .val_spec = int_spec },
+    ));
+}
+
+test "fieldTypeAltEqual: func_t alts compare param/return list lengths and element types" {
+    const int_spec = scalarSpec(.int);
+    const str_spec = scalarSpec(.string);
+    const params_a = [_]FieldTypeSpec{int_spec};
+    const params_b = [_]FieldTypeSpec{str_spec};
+    const returns_a = [_]FieldTypeSpec{int_spec};
+
+    try testing.expect(fieldTypeAltEqual(
+        .{ .typ = .func_t, .func_params = &params_a, .func_returns = &returns_a },
+        .{ .typ = .func_t, .func_params = &params_a, .func_returns = &returns_a },
+    ));
+    try testing.expect(!fieldTypeAltEqual(
+        .{ .typ = .func_t, .func_params = &params_a, .func_returns = &returns_a },
+        .{ .typ = .func_t, .func_params = &params_b, .func_returns = &returns_a },
+    ));
+    try testing.expect(!fieldTypeAltEqual(
+        .{ .typ = .func_t, .func_params = &params_a, .func_returns = &returns_a },
+        .{ .typ = .func_t, .func_params = &[_]FieldTypeSpec{}, .func_returns = &returns_a },
+    ));
+    try testing.expect(fieldTypeAltEqual(
+        .{ .typ = .func_t, .func_params = null, .func_returns = null },
+        .{ .typ = .func_t, .func_params = null, .func_returns = null },
+    ));
+}
+
+test "fieldTypeAltEqual: plain scalar alts (int/string/etc.) compare by tag alone" {
+    try testing.expect(fieldTypeAltEqual(scalarAlt(.int), scalarAlt(.int)));
+    try testing.expect(!fieldTypeAltEqual(scalarAlt(.int), scalarAlt(.string)));
+    try testing.expect(fieldTypeAltEqual(scalarAlt(.boolean), scalarAlt(.boolean)));
+}
+
+test "fieldTypeSpecEqual: alt-count and per-alt comparison" {
+    const one_int = scalarSpec(.int);
+    const one_int_2 = scalarSpec(.int);
+    try testing.expect(fieldTypeSpecEqual(one_int, one_int_2));
+
+    const two_alts = FieldTypeSpec{ .alts = @constCast(&[_]FieldTypeAlt{ scalarAlt(.int), scalarAlt(.string) }) };
+    try testing.expect(!fieldTypeSpecEqual(one_int, two_alts));
+
+    const one_string = scalarSpec(.string);
+    try testing.expect(!fieldTypeSpecEqual(one_int, one_string));
+}
+
+test "interfaceMethodMatches: matching signature, arity mismatch, variadic mismatch, and struct-receiver implicit first param" {
+    const int_spec = scalarSpec(.int);
+    const str_spec = scalarSpec(.string);
+
+    const method = InterfaceMethodSpec{
+        .name = "greet",
+        .arity = 1,
+        .is_variadic = false,
+        .variadic_type = scalarSpec(.any),
+        .param_types = @constCast(&[_]FieldTypeSpec{str_spec}),
+        .return_types = @constCast(&[_]FieldTypeSpec{int_spec}),
+        .has_typed_params = true,
+        .has_typed_returns = true,
+    };
+
+    const matching_fn = FuncObj{
+        .ip = 0,
+        .arity = 1,
+        .is_variadic = false,
+        .variadic_type = scalarSpec(.any),
+        .capture_slots = &.{},
+        .param_types = @constCast(&[_]FieldTypeSpec{str_spec}),
+        .has_typed_params = true,
+        .return_types = @constCast(&[_]FieldTypeSpec{int_spec}),
+        .has_typed_returns = true,
+    };
+    try testing.expect(interfaceMethodMatches(method, matching_fn));
+
+    var arity_mismatch_fn = matching_fn;
+    arity_mismatch_fn.arity = 3;
+    arity_mismatch_fn.param_types = @constCast(&[_]FieldTypeSpec{ str_spec, int_spec, int_spec });
+    try testing.expect(!interfaceMethodMatches(method, arity_mismatch_fn));
+
+    var variadic_mismatch_fn = matching_fn;
+    variadic_mismatch_fn.is_variadic = true;
+    try testing.expect(!interfaceMethodMatches(method, variadic_mismatch_fn));
+
+    // Struct receiver: f.arity == m.arity + 1 with one extra leading param
+    // (the implicit receiver), skipped via f_param_start = 1.
+    const receiver_fn = FuncObj{
+        .ip = 0,
+        .arity = 2,
+        .is_variadic = false,
+        .variadic_type = scalarSpec(.any),
+        .capture_slots = &.{},
+        .param_types = @constCast(&[_]FieldTypeSpec{ scalarSpec(.struct_t), str_spec }),
+        .has_typed_params = true,
+        .return_types = @constCast(&[_]FieldTypeSpec{int_spec}),
+        .has_typed_returns = true,
+    };
+    try testing.expect(interfaceMethodMatches(method, receiver_fn));
+}
+
 pub fn interfaceMethodMatches(m: InterfaceMethodSpec, f: FuncObj) bool {
     if (m.is_variadic != f.is_variadic) return false;
     var f_param_start: usize = 0;

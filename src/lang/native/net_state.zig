@@ -1380,3 +1380,255 @@ test "net policy: rules are evaluated LIFO — the most recently added rule wins
     // The narrower, later allow rule overrides the earlier broad deny.
     try testing.expect(matchPolicy(&policy, "10.1.2.3:80", true));
 }
+
+// ---------------------------------------------------------------------------
+// Host-handler round-trip tests
+// ---------------------------------------------------------------------------
+//
+// netDial/netListen/etc. delegate entirely to a registered GengoNetHandlers
+// when one is set (the embedding-API host-callback path) instead of touching
+// real POSIX sockets at all. A fake handler set lets every one of those
+// delegation branches run for real — argument marshaling, handle bookkeeping,
+// error mapping — with no actual network I/O, the same technique that closed
+// cap_http.zig/http_state.zig's coverage gap.
+
+const FakeNetHandlerState = struct {
+    buf: [2][256]u8 = undefined,
+    buf_len: [2]usize = .{ 0, 0 },
+    buf_pos: [2]usize = .{ 0, 0 },
+    listener_handle: i32 = 100,
+    last_deadline_ms: i64 = -1,
+    last_read_deadline_ms: i64 = -1,
+    last_write_deadline_ms: i64 = -1,
+    last_accept_deadline_ms: i64 = -1,
+    dial_network: [16]u8 = undefined,
+    dial_network_len: usize = 0,
+    dial_address: [64]u8 = undefined,
+    dial_address_len: usize = 0,
+    accept_should_block: bool = false,
+};
+
+var g_fake_net: FakeNetHandlerState = .{};
+
+fn fakeDial(network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 {
+    _ = userdata;
+    const nw = network[0..network_len];
+    const addr = address[0..address_len];
+    @memcpy(g_fake_net.dial_network[0..nw.len], nw);
+    g_fake_net.dial_network_len = nw.len;
+    @memcpy(g_fake_net.dial_address[0..addr.len], addr);
+    g_fake_net.dial_address_len = addr.len;
+    out_handle.* = 1;
+    return 0;
+}
+
+fn fakeRead(handle: i32, buf: [*]u8, max_bytes: i32, userdata: ?*anyopaque) callconv(.c) i32 {
+    _ = userdata;
+    const idx: usize = @intCast(handle - 1);
+    const avail = g_fake_net.buf_len[idx] - g_fake_net.buf_pos[idx];
+    const n = @min(avail, @as(usize, @intCast(max_bytes)));
+    @memcpy(buf[0..n], g_fake_net.buf[idx][g_fake_net.buf_pos[idx] .. g_fake_net.buf_pos[idx] + n]);
+    g_fake_net.buf_pos[idx] += n;
+    return @intCast(n);
+}
+
+fn fakeWrite(handle: i32, data: [*]const u8, len: i32, userdata: ?*anyopaque) callconv(.c) i32 {
+    _ = userdata;
+    const idx: usize = @intCast(handle - 1);
+    const n: usize = @intCast(len);
+    @memcpy(g_fake_net.buf[idx][g_fake_net.buf_len[idx] .. g_fake_net.buf_len[idx] + n], data[0..n]);
+    g_fake_net.buf_len[idx] += n;
+    return @intCast(n);
+}
+
+fn fakeClose(handle: i32, userdata: ?*anyopaque) callconv(.c) void {
+    _ = handle;
+    _ = userdata;
+}
+
+fn fakeLocalAddr(handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void {
+    _ = handle;
+    _ = userdata;
+    const s = "127.0.0.1:9001";
+    const n = @min(s.len, @as(usize, @intCast(buf_len)) - 1);
+    @memcpy(buf[0..n], s[0..n]);
+    buf[n] = 0;
+}
+
+fn fakeRemoteAddr(handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void {
+    _ = handle;
+    _ = userdata;
+    const s = "203.0.113.7:443";
+    const n = @min(s.len, @as(usize, @intCast(buf_len)) - 1);
+    @memcpy(buf[0..n], s[0..n]);
+    buf[n] = 0;
+}
+
+fn fakeSetDeadline(handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void {
+    _ = handle;
+    _ = userdata;
+    g_fake_net.last_deadline_ms = ms;
+}
+
+fn fakeSetReadDeadline(handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void {
+    _ = handle;
+    _ = userdata;
+    g_fake_net.last_read_deadline_ms = ms;
+}
+
+fn fakeSetWriteDeadline(handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void {
+    _ = handle;
+    _ = userdata;
+    g_fake_net.last_write_deadline_ms = ms;
+}
+
+fn fakeListen(network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_listener_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 {
+    _ = network;
+    _ = network_len;
+    _ = address;
+    _ = address_len;
+    _ = userdata;
+    out_listener_handle.* = g_fake_net.listener_handle;
+    return 0;
+}
+
+fn fakeAccept(listener_handle: i32, out_conn_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 {
+    _ = listener_handle;
+    _ = userdata;
+    if (g_fake_net.accept_should_block) return 0;
+    out_conn_handle.* = 2;
+    return 1;
+}
+
+fn fakeListenerClose(listener_handle: i32, userdata: ?*anyopaque) callconv(.c) void {
+    _ = listener_handle;
+    _ = userdata;
+}
+
+fn fakeListenerLocalAddr(listener_handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void {
+    _ = listener_handle;
+    _ = userdata;
+    const s = "0.0.0.0:9000";
+    const n = @min(s.len, @as(usize, @intCast(buf_len)) - 1);
+    @memcpy(buf[0..n], s[0..n]);
+    buf[n] = 0;
+}
+
+fn fakeSetAcceptDeadline(listener_handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void {
+    _ = listener_handle;
+    _ = userdata;
+    g_fake_net.last_accept_deadline_ms = ms;
+}
+
+const fake_net_handlers: GengoNetHandlers = .{
+    .dial = fakeDial,
+    .read = fakeRead,
+    .write = fakeWrite,
+    .close = fakeClose,
+    .local_addr = fakeLocalAddr,
+    .remote_addr = fakeRemoteAddr,
+    .set_deadline = fakeSetDeadline,
+    .set_read_deadline = fakeSetReadDeadline,
+    .set_write_deadline = fakeSetWriteDeadline,
+    .listen = fakeListen,
+    .accept = fakeAccept,
+    .listener_close = fakeListenerClose,
+    .listener_local_addr = fakeListenerLocalAddr,
+    .set_accept_deadline = fakeSetAcceptDeadline,
+};
+
+test "net_state: dial/write/read/close and listen/accept/write/read/close round-trip through a fake host handler set" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    g_fake_net = .{};
+    setNetHandlers(fake_net_handlers, null);
+    defer resetHandlers();
+    try testing.expect(hasHandlers());
+
+    const conn_id = try netDial("tcp", "example.com:443");
+    try testing.expectEqualStrings("tcp", g_fake_net.dial_network[0..g_fake_net.dial_network_len]);
+    try testing.expectEqualStrings("example.com:443", g_fake_net.dial_address[0..g_fake_net.dial_address_len]);
+
+    const written = try netWrite(conn_id, "hello");
+    try testing.expectEqual(@as(usize, 5), written);
+
+    const data = try netRead(conn_id, 5);
+    defer std.heap.page_allocator.free(data);
+    try testing.expectEqualStrings("hello", data);
+
+    const local = try netLocalAddr(conn_id);
+    defer std.heap.page_allocator.free(local);
+    try testing.expectEqualStrings("127.0.0.1:9001", local);
+
+    const remote = try netRemoteAddr(conn_id);
+    defer std.heap.page_allocator.free(remote);
+    try testing.expectEqualStrings("203.0.113.7:443", remote);
+
+    try netSetDeadline(conn_id, 1000);
+    try testing.expectEqual(@as(i64, 1000), g_fake_net.last_deadline_ms);
+    try netSetReadDeadline(conn_id, 2000);
+    try testing.expectEqual(@as(i64, 2000), g_fake_net.last_read_deadline_ms);
+    try netSetWriteDeadline(conn_id, 3000);
+    try testing.expectEqual(@as(i64, 3000), g_fake_net.last_write_deadline_ms);
+
+    try netClose(conn_id);
+
+    const listener_id = try netListen("tcp", "0.0.0.0:9000");
+    const accepted_id = try netListenerAccept(listener_id);
+
+    _ = try netWrite(accepted_id, "world");
+    const data2 = try netRead(accepted_id, 5);
+    defer std.heap.page_allocator.free(data2);
+    try testing.expectEqualStrings("world", data2);
+
+    const listener_local = try netListenerLocalAddr(listener_id);
+    defer std.heap.page_allocator.free(listener_local);
+    try testing.expectEqualStrings("0.0.0.0:9000", listener_local);
+
+    try netListenerSetAcceptDeadline(listener_id, 4000);
+    try testing.expectEqual(@as(i64, 4000), g_fake_net.last_accept_deadline_ms);
+
+    try netListenerClose(listener_id);
+}
+
+test "net_state: accept returns DeadlineExceeded when the host handler reports would-block" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    g_fake_net = .{ .accept_should_block = true };
+    setNetHandlers(fake_net_handlers, null);
+    defer resetHandlers();
+
+    const listener_id = try netListen("tcp", "0.0.0.0:9000");
+    try testing.expectError(error.DeadlineExceeded, netListenerAccept(listener_id));
+    try netListenerClose(listener_id);
+}
+
+test "net_state: dial/listen surface 'too many connections/listeners' once the fixed-size pools fill up" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    g_fake_net = .{};
+    setNetHandlers(fake_net_handlers, null);
+    defer resetHandlers();
+
+    var i: usize = 0;
+    while (i < MaxConns) : (i += 1) _ = try netDial("tcp", "x:1");
+    try testing.expectError(error.NetError, netDial("tcp", "x:1"));
+    try testing.expectEqualStrings("too many connections (max 16)", lastNetErr());
+
+    i = 0;
+    while (i < MaxListeners) : (i += 1) _ = try netListen("tcp", "x:1");
+    try testing.expectError(error.NetError, netListen("tcp", "x:1"));
+    try testing.expectEqualStrings("too many listeners (max 8)", lastNetErr());
+}
