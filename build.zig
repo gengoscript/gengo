@@ -35,6 +35,7 @@ pub fn build(b: *std.Build) void {
 
     const perf_opt = b.option(bool, "perf", "Enable performance counters (outputs PERF: lines to stderr)") orelse false;
     const gc_stress_opt = b.option(bool, "gc_stress", "Force GC on every allocation to detect unrooted-value bugs") orelse false;
+    const coverage_opt = b.option(bool, "coverage", "Build native test binaries with the LLVM backend and install them to zig-out/coverage-bin for kcov instrumentation (see tools/coverage.sh); the default self-hosted x86_64 backend emits DWARF5 that kcov cannot parse for project source, so this is required for any non-zero coverage numbers") orelse false;
     const heap_paranoia_opt = b.option(bool, "heap_paranoia", "Assert no live pointers are overwritten in the heap bump allocator") orelse false;
     const cap_net_opt = b.option(bool, "cap_net", "Include cap:net capability") orelse true;
     const cap_http_opt = b.option(bool, "cap_http", "Include cap:http capability") orelse true;
@@ -323,7 +324,7 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
         .optimize = .Debug,
     });
-    const lexer_test = b.addTest(.{ .root_module = lexer_test_mod, .test_runner = standalone_runner });
+    const lexer_test = b.addTest(.{ .name = "lexer-test", .root_module = lexer_test_mod, .test_runner = standalone_runner, .use_llvm = if (coverage_opt) true else null });
     const run_lexer_tests = b.addRunArtifact(lexer_test);
 
     const lexer_test_step = b.step("lexer-test", "Run lexer unit tests");
@@ -334,7 +335,7 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
         .optimize = .Debug,
     });
-    const build_test = b.addTest(.{ .root_module = build_test_mod, .test_runner = standalone_runner });
+    const build_test = b.addTest(.{ .name = "build-test", .root_module = build_test_mod, .test_runner = standalone_runner, .use_llvm = if (coverage_opt) true else null });
     const run_build_tests = b.addRunArtifact(build_test);
 
     const build_test_step = b.step("build-test", "Run build graph contract tests");
@@ -347,7 +348,7 @@ pub fn build(b: *std.Build) void {
     });
     engine_api_test_mod.addImport("build_options", build_opts_mod);
     engine_api_test_mod.addImport("runtime_config", runtime_config_mod);
-    const engine_api_test = b.addTest(.{ .root_module = engine_api_test_mod, .test_runner = standalone_runner });
+    const engine_api_test = b.addTest(.{ .name = "engine-api-test", .root_module = engine_api_test_mod, .test_runner = standalone_runner, .use_llvm = if (coverage_opt) true else null });
     const run_engine_api_tests = b.addRunArtifact(engine_api_test);
 
     const engine_api_test_step = b.step("engine-api-test", "Run native engine C API tests");
@@ -367,7 +368,7 @@ pub fn build(b: *std.Build) void {
     main_test_mod.addImport("build_options", native_cli_opts_mod);
     main_test_mod.addImport("runtime_config", runtime_config_mod);
     main_test_mod.link_libc = true;
-    const main_test = b.addTest(.{ .root_module = main_test_mod, .test_runner = standalone_runner });
+    const main_test = b.addTest(.{ .name = "main-test", .root_module = main_test_mod, .test_runner = standalone_runner, .use_llvm = if (coverage_opt) true else null });
     const run_main_tests = b.addRunArtifact(main_test);
 
     const main_test_step = b.step("main-test", "Run src/main.zig's own unit tests (CLI-internal helpers)");
@@ -383,7 +384,7 @@ pub fn build(b: *std.Build) void {
     });
     heap_test_mod.addImport("build_options", build_opts_mod);
     heap_test_mod.addImport("runtime_config", runtime_config_mod);
-    const heap_test = b.addTest(.{ .root_module = heap_test_mod, .test_runner = standalone_runner });
+    const heap_test = b.addTest(.{ .name = "heap-test", .root_module = heap_test_mod, .test_runner = standalone_runner, .use_llvm = if (coverage_opt) true else null });
     const run_heap_tests = b.addRunArtifact(heap_test);
 
     const heap_test_step = b.step("heap-test", "Run heap and GC invariant tests");
@@ -398,7 +399,7 @@ pub fn build(b: *std.Build) void {
     });
     compiler_test_mod.addImport("build_options", build_opts_mod);
     compiler_test_mod.addImport("runtime_config", runtime_config_mod);
-    const compiler_test = b.addTest(.{ .root_module = compiler_test_mod, .test_runner = standalone_runner });
+    const compiler_test = b.addTest(.{ .name = "compiler-test", .root_module = compiler_test_mod, .test_runner = standalone_runner, .use_llvm = if (coverage_opt) true else null });
     const run_compiler_tests = b.addRunArtifact(compiler_test);
 
     const compiler_test_step = b.step("compiler-test", "Run compiler bytecode output tests");
@@ -413,7 +414,7 @@ pub fn build(b: *std.Build) void {
     });
     embedding_frag_test_mod.addImport("build_options", build_opts_mod);
     embedding_frag_test_mod.addImport("runtime_config", runtime_config_mod);
-    const embedding_frag_test = b.addTest(.{ .root_module = embedding_frag_test_mod, .test_runner = standalone_runner });
+    const embedding_frag_test = b.addTest(.{ .name = "embedding-frag-test", .root_module = embedding_frag_test_mod, .test_runner = standalone_runner, .use_llvm = if (coverage_opt) true else null });
     const run_embedding_frag_tests = b.addRunArtifact(embedding_frag_test);
 
     const embedding_frag_test_step = b.step("embedding-frag-test", "Run long-lived embedding fragmentation harness tests");
@@ -428,11 +429,31 @@ pub fn build(b: *std.Build) void {
     });
     chaos_spec_test_mod.addImport("build_options", build_opts_mod);
     chaos_spec_test_mod.addImport("runtime_config", runtime_config_mod);
-    const chaos_spec_test = b.addTest(.{ .root_module = chaos_spec_test_mod, .test_runner = standalone_runner });
+    const chaos_spec_test = b.addTest(.{ .name = "chaos-spec-test", .root_module = chaos_spec_test_mod, .test_runner = standalone_runner, .use_llvm = if (coverage_opt) true else null });
     const run_chaos_spec_tests = b.addRunArtifact(chaos_spec_test);
 
     const chaos_spec_test_step = b.step("chaos-spec-test", "Run chaos and spec/fail cases in-process");
     chaos_spec_test_step.dependOn(&run_chaos_spec_tests.step);
+
+    // ── Coverage instrumentation (native test binaries only) ─────────────────
+    // Installs each native test binary to zig-out/coverage-bin/ so tools/coverage.sh
+    // can run every one under kcov and merge the results. Only useful paired with
+    // -Dcoverage=true (see that option's doc comment above for why).
+    const coverage_bin_step = b.step("coverage-bin", "Install native test binaries to zig-out/coverage-bin (pair with -Dcoverage=true)");
+    const coverage_dest: std.Build.Step.InstallArtifact.Options = .{ .dest_dir = .{ .override = .{ .custom = "coverage-bin" } } };
+    for ([_]*std.Build.Step.Compile{
+        lexer_test,
+        build_test,
+        engine_api_test,
+        main_test,
+        heap_test,
+        compiler_test,
+        embedding_frag_test,
+        chaos_spec_test,
+    }) |test_exe| {
+        const install = b.addInstallArtifact(test_exe, coverage_dest);
+        coverage_bin_step.dependOn(&install.step);
+    }
 
     const unit_step = b.step("unit", "Run VM safety, value, embedding, and engine API checks");
     unit_step.dependOn(&run_vm_safety.step);
