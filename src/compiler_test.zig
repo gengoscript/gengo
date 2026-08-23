@@ -8420,3 +8420,84 @@ test "compiler: std.array.filter/map raise TypeError for a non-array argument or
     try std.testing.expectError(error.TypeError, rt.callGlobal("filterBadPredicate", &.{}));
     try std.testing.expectError(error.TypeError, rt.callGlobal("mapNonArray", &.{}));
 }
+
+// Regression: two independent bugs in core.zig's deepEqualObject/
+// deepEqualValue made std.core.deep_equal spuriously return false for
+// content-identical arrays:
+//
+// 1. deepEqualObject's cross-variant array exemption checked
+//    `(a==.array or a==.array_managed) and (b==.array or b==.array_managed)`
+//    directly, missing .array_view/.array_capacity — the Object variant
+//    std.core.append produces once an array outgrows its initial backing.
+//    Fixed to use vms.isArrayObject (recognizes all four array-like tags),
+//    matching the switch below it that already handled all four uniformly.
+//
+// 2. Bigger: a typed `[]int` var decl wraps its array in a .named_value
+//    carrying a synthesized, PER-DECLARATION-SITE "[]int" NamedTypeObj (see
+//    vm.zig's checkAssignCompat doc comment: "each var decl creates its own
+//    type object"). deepEqualObject's .named_value case compared that
+//    wrapper by raw pointer identity, so two SEPARATELY DECLARED []int
+//    values — even a plain array literal against the exact same values
+//    built via std.core.append on a []int-typed variable — always failed,
+//    since every declaration site gets a distinct anonymous type object.
+//    Fixed by unwrapping anonymous array_t/map_t named-value wrappers
+//    (unwrapTransparentArrayOrMap) before any comparison, mirroring how
+//    vm.zig's own equality/assignment-compat checks already treat these
+//    synthesized wrappers as transparent rather than nominally distinct.
+//    A REAL user-declared named type (`type Meter int`) is never
+//    is_anonymous and keeps the strict pointer-identity check — two
+//    differently-declared named types with the same underlying value must
+//    NOT compare deep-equal.
+test "compiler: std.core.deep_equal treats an append-grown array as equal to an equivalent literal" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func appendVsLiteral() bool {
+        \\    grown := []int{}
+        \\    grown = std.core.append(grown, 1)
+        \\    grown = std.core.append(grown, 2)
+        \\    grown = std.core.append(grown, 3)
+        \\    literal := [1, 2, 3]
+        \\    return std.core.deep_equal(grown, literal)
+        \\}
+        \\func literalVsAppend() bool {
+        \\    grown := []int{}
+        \\    grown = std.core.append(grown, 1)
+        \\    grown = std.core.append(grown, 2)
+        \\    literal := [1, 2]
+        \\    return std.core.deep_equal(literal, grown)
+        \\}
+        \\func stillDetectsDifference() bool {
+        \\    grown := []int{}
+        \\    grown = std.core.append(grown, 1)
+        \\    grown = std.core.append(grown, 2)
+        \\    literal := [1, 3]
+        \\    return std.core.deep_equal(grown, literal)
+        \\}
+        \\func twoAppendedArraysAreEqual() bool {
+        \\    a := []int{}
+        \\    a = std.core.append(a, 1)
+        \\    b := []int{}
+        \\    b = std.core.append(b, 1)
+        \\    return std.core.deep_equal(a, b)
+        \\}
+        \\type Meter int
+        \\type Foot int
+        \\func sameDeclaredNamedTypeEqual() bool {
+        \\    a := Meter(5)
+        \\    c := Meter(5)
+        \\    return std.core.deep_equal(a, c)
+        \\}
+    );
+    const r1 = try rt.callGlobal("appendVsLiteral", &.{});
+    try std.testing.expect(r1.boolean);
+    const r2 = try rt.callGlobal("literalVsAppend", &.{});
+    try std.testing.expect(r2.boolean);
+    const r3 = try rt.callGlobal("stillDetectsDifference", &.{});
+    try std.testing.expect(!r3.boolean);
+    const r4 = try rt.callGlobal("twoAppendedArraysAreEqual", &.{});
+    try std.testing.expect(r4.boolean);
+    const r5 = try rt.callGlobal("sameDeclaredNamedTypeEqual", &.{});
+    try std.testing.expect(r5.boolean);
+}

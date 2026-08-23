@@ -492,7 +492,7 @@ fn deepEqualMap(a_entries: []const MapEntry, b_entries: []const MapEntry, visits
 fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *usize) anyerror!bool {
     if (a == b) return true;
     if (std.meta.activeTag(a.*) != std.meta.activeTag(b.*)) {
-        if ((a.* == .array or a.* == .array_managed) and (b.* == .array or b.* == .array_managed)) {} else if (vms.isMapObject(a) and vms.isMapObject(b)) {
+        if (vms.isArrayObject(a) and vms.isArrayObject(b)) {} else if (vms.isMapObject(a) and vms.isMapObject(b)) {
             return try deepEqualMap(try vms.asMapSlice(a), try vms.asMapSlice(b), visits, visit_len);
         } else {
             return false;
@@ -530,6 +530,15 @@ fn deepEqualObject(a: *Object, b: *Object, visits: []DeepEqVisit, visit_len: *us
         .interface_type => |ait| return common.streq(ait.qualified_name, b.interface_type.qualified_name),
         .named_type => |ant| return common.streq(ant.qualified_name, b.named_type.qualified_name),
         .named_value => |anv| {
+            // Anonymous array/map named-type wrappers are unwrapped away
+            // entirely by deepEqualValue's unwrapTransparentArrayOrMap
+            // before either side can ever reach here as a still-.named_value
+            // object (mirrors vm.zig's checkAssignCompat, which treats those
+            // synthesized per-declaration "[]int"/"map[K]V" wrappers as
+            // transparent rather than nominally distinct). Any .named_value
+            // that DOES reach here is therefore a real user-declared named
+            // type (`type Meter int`), which has exactly one canonical type
+            // object — pointer identity is the correct check.
             if (anv.typ != b.named_value.typ) return false;
             try appendVisitedPair(a, b, visits, visit_len);
             return try deepEqualValue(anv.value, b.named_value.value, visits, visit_len);
@@ -605,7 +614,30 @@ fn strBytesFromObj(o: *Object) ?[]const u8 {
     };
 }
 
-fn deepEqualValue(a: Value, b: Value, visits: []DeepEqVisit, visit_len: *usize) anyerror!bool {
+// Anonymous array/map named-type wrappers (the synthesized "[]int"/
+// "map[K]V" every typed var decl gets — see vm.zig's checkAssignCompat doc
+// comment: "each var decl creates its own type object") are compiler
+// bookkeeping, not a real nominal type. Unwrapping them before comparison
+// means two independently-constructed []T/map[K]V values (or one such value
+// against a plain, unwrapped array/map — e.g. the result of std.core.append
+// on a []T-typed variable compared against a bare array literal) compare by
+// content instead of spuriously failing on a per-declaration-site type
+// pointer. A real user-declared named type (`type Meter int`) is never
+// is_anonymous and is left untouched.
+fn unwrapTransparentArrayOrMap(v: Value) Value {
+    if (v == .object and v.object.* == .named_value) {
+        const nv = v.object.named_value;
+        const nt = nv.typ.named_type;
+        if (nt.is_anonymous and (nt.base == .array_t or nt.base == .map_t)) {
+            return unwrapTransparentArrayOrMap(nv.value);
+        }
+    }
+    return v;
+}
+
+fn deepEqualValue(a_in: Value, b_in: Value, visits: []DeepEqVisit, visit_len: *usize) anyerror!bool {
+    const a = unwrapTransparentArrayOrMap(a_in);
+    const b = unwrapTransparentArrayOrMap(b_in);
     if (a == .string and b == .object) {
         if (strBytesFromObj(b.object)) |bs| return common.streq(a.string.bytes, bs);
     }
