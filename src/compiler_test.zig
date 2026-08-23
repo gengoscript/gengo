@@ -941,6 +941,223 @@ test "repl: a string value (bare, in an array, in a map) survives across increme
     }
 }
 
+// Coverage gap audit (2026-08-23): runtime.zig's REPL cross-line persistence
+// machinery (persistReplSymbols/restoreReplCompilerState and friends) was
+// almost entirely untested beyond the two compile-error-parity tests above
+// and the string-survival regression. Each runIncremental call compiles
+// against a brand-new Compiler, so every declaration category (named-type
+// range/predicate metadata, struct/interface types, global funcs, enum
+// member lists, std/import namespace provenance) has to be explicitly
+// serialized out of the old compiler's registry and replayed into the new
+// one — these tests drive at least two runIncremental calls each and prove
+// the LATER call actually sees what an EARLIER one declared, not just that
+// a single line in isolation compiles.
+test "repl: a named type's range constraint (not just its bare name) persists across incremental compiles" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.runIncremental("type Score int range 0..100") == .ok);
+    try std.testing.expect(rt.runIncremental(
+        \\func makeGood() Score { return Score(50) }
+        \\func makeBad() Score { return Score(500) }
+    ) == .ok);
+
+    switch (rt.call("makeGood", &.{})) {
+        .ok => |v| try std.testing.expect(v == .int and v.int == 50),
+        .runtime_error => return error.TestUnexpectedResult,
+    }
+    switch (rt.call("makeBad", &.{})) {
+        .ok => return error.TestUnexpectedResult,
+        .runtime_error => |e| try std.testing.expectEqual(error.RangeError, e.kind),
+    }
+}
+
+test "repl: a struct type declared on one incremental line is instantiated and read back on a later line" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.runIncremental("type Point struct { x int, y int }") == .ok);
+    try std.testing.expect(rt.runIncremental(
+        \\func makePoint() Point { return Point{x: 3, y: 4} }
+        \\func getX(p Point) int { return p.x }
+    ) == .ok);
+
+    const p = switch (rt.call("makePoint", &.{})) {
+        .ok => |v| v,
+        .runtime_error => return error.TestUnexpectedResult,
+    };
+    switch (rt.call("getX", &.{p})) {
+        .ok => |v| try std.testing.expect(v == .int and v.int == 3),
+        .runtime_error => return error.TestUnexpectedResult,
+    }
+}
+
+// KNOWN LIMITATION, found by this test (not previously documented anywhere
+// — see docs/changelog.md's "REPL type persistence" entry, which lists only
+// type/subtype/struct/interface/variant DECLARATIONS as surviving across
+// REPL lines, deliberately omitting func). runIncremental() unconditionally
+// calls chunk_state.reset() on every line (see its own doc comment above),
+// wiping all previously-compiled BYTECODE; only declaration METADATA is
+// persisted/restored (persistReplSymbols's own comment on the global-func
+// branch: "name only; overflow is graceful — duplicate detection
+// degrades" — i.e. purely for duplicate-declaration checking, not for
+// making the function body callable again). A function declared on one
+// REPL line is only actually callable as long as its ORIGINAL chunk is
+// still current: it works immediately after its own declaring line, but
+// the very next unrelated line invalidates its bytecode reference, and a
+// later call reads out-of-bounds into whatever the new line's chunk
+// reused that offset for. This test documents CURRENT (broken) behavior;
+// it should be rewritten to expect a correct call once REPL function
+// persistence is implemented (analogous to how type declarations already
+// are, by re-elaborating/re-emitting the function body fresh into every
+// new line's chunk rather than only tracking its name).
+test "repl: a function's compiled body does not survive past its own incremental line (known limitation)" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.runIncremental("func double(n int) int { return n * 2 }") == .ok);
+    switch (rt.call("double", &.{.{ .int = 5 }})) {
+        .ok => |v| try std.testing.expect(v == .int and v.int == 10),
+        .runtime_error => return error.TestUnexpectedResult,
+    }
+
+    // A subsequent, unrelated incremental line resets the chunk out from
+    // under the previously-declared function's stale bytecode reference.
+    try std.testing.expect(rt.runIncremental("_ = 1") == .ok);
+    switch (rt.call("double", &.{.{ .int = 5 }})) {
+        .ok => return error.TestUnexpectedResult, // would mean this got fixed — update the test
+        .runtime_error => |e| try std.testing.expectEqual(error.BytecodeOutOfBounds, e.kind),
+    }
+}
+
+test "repl: an enum's full member list (not just its name) persists across incremental compiles" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.runIncremental("type Colors enum { red, green, blue }") == .ok);
+    try std.testing.expect(rt.runIncremental(
+        \\func blueOrdinal() int { return Colors.blue.int }
+        \\func greenName() string { return Colors.green.name }
+    ) == .ok);
+
+    switch (rt.call("blueOrdinal", &.{})) {
+        .ok => |v| try std.testing.expect(v == .int and v.int == 2),
+        .runtime_error => return error.TestUnexpectedResult,
+    }
+    switch (rt.call("greenName", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("green", try vms.asStringValue(v)),
+        .runtime_error => return error.TestUnexpectedResult,
+    }
+}
+
+// KNOWN LIMITATION (same root cause as the "function's compiled body does
+// not survive" test above, manifesting worse here: SILENTLY WRONG instead
+// of erroring). `Square.area()`'s method body is compiled into the chunk
+// on incremental line 2; by line 3, chunk_state.reset() has invalidated
+// that bytecode reference. Calling it here through interface dynamic
+// dispatch (sh.area()) doesn't hit the bounds check that direct-call
+// hits above — it apparently returns without error, but with the WRONG
+// value. This documents CURRENT (broken) behavior. Do not treat the
+// currently-observed value as intentional/spec'd — it is presented here
+// only so a future fix can tell it actually changed something, and this
+// test should be rewritten to expect the correct area (16) once REPL
+// function/method-body persistence is implemented (see the sibling test
+// above for the full root-cause writeup).
+test "repl: a method's compiled body from an earlier line is stale by the time a later line dispatches to it through an interface (known limitation)" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.runIncremental("type Shape interface { area() int }") == .ok);
+    try std.testing.expect(rt.runIncremental(
+        \\type Square struct { side int }
+        \\func (s Square) area() int { return s.side * s.side }
+    ) == .ok);
+    try std.testing.expect(rt.runIncremental(
+        \\func totalArea(sh Shape) int { return sh.area() }
+        \\func run() int { return totalArea(Square{side: 4}) }
+    ) == .ok);
+
+    switch (rt.call("run", &.{})) {
+        .ok => |v| try std.testing.expect(v != .int or v.int != 16), // would mean this got fixed — update the test
+        .runtime_error => {}, // also acceptable evidence of the same staleness; either outcome documents the bug
+    }
+}
+
+test "repl: std-import namespace provenance and a locally-declared struct coexist across incremental lines" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.runIncremental("std := import(\"std\")") == .ok);
+    try std.testing.expect(rt.runIncremental("type Widget struct { n int }") == .ok);
+    try std.testing.expect(rt.runIncremental(
+        \\func combine(w Widget) int { return w.n + std.core.len([1, 2, 3]) }
+        \\func run() int { return combine(Widget{n: 10}) }
+    ) == .ok);
+
+    switch (rt.call("run", &.{})) {
+        .ok => |v| try std.testing.expect(v == .int and v.int == 13),
+        .runtime_error => return error.TestUnexpectedResult,
+    }
+}
+
+// Coverage gap audit (2026-08-23): MaxReplSyms (= MaxTypes + MaxNamedTypes +
+// MaxGlobals, runtime.zig) is sized so a single compiler's registry can
+// never legitimately produce more *entries* than the REPL symbol table can
+// hold — the per-category limits (TooManyTypes/TooManyNamedTypes/
+// TooManyGlobals) always fire first. But persistReplSymbols' NAME BUFFER
+// (repl_sym_name_buf, MaxNamedTypes*64 + MaxGlobals*64 bytes) is sized only
+// for an *average* 64-byte name and has no matching per-declaration cap, so
+// it can overflow on byte count long before any entry-count ceiling is
+// reached. Use deliberately long names to hit that path cheaply (well under
+// MaxNamedTypes named-type declarations) instead of needing thousands of
+// lines.
+// One declaration per runIncremental call (real REPL usage — a line at a
+// time), not one giant concatenated blob: cfg.max_input_bytes is a
+// preset-dependent build option (differs under -Dpreset=stress), and a
+// single huge multi-line input previously tripped runIncremental's own
+// `src.len > cfg.max_input_bytes` guard (error.InputTooLong) under the
+// stress preset's smaller limit before ever reaching the REPL symbol
+// buffer it meant to test. Each line here is ~620 bytes, comfortably under
+// every preset's max_input_bytes, so only the intended sym_name_buf
+// exhaustion (ReplSymNameBufSize = (MaxNamedTypes + MaxGlobals) * 64 =
+// 98304 bytes; ~163 declarations at this padded name length) can trigger.
+test "repl: exceeding the REPL symbol name buffer surfaces a graceful overflow error, not a crash" {
+    var rt: Runtime = .{};
+    defer rt.deinit();
+    try rt.initWithConfig(.{ .allow_io = false }, 4 * 1024 * 1024, 8192, vms.MaxStack, vms.MaxFrames, cfg.max_defers, std.testing.allocator);
+
+    const pad = "a" ** 600;
+    var buf: [1024]u8 = undefined;
+    var i: u32 = 0;
+    while (i < 300) : (i += 1) {
+        const line = try std.fmt.bufPrint(&buf, "type T{d}{s} int", .{ i, pad });
+        rt.runIncremental(line) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expectEqualStrings("REPL symbol name buffer full", rt.last_compile_msg_buf[0..rt.last_compile_msg_len]);
+            return;
+        };
+    }
+    return error.TestUnexpectedResult; // never overflowed within 300 declarations — buffer size assumption is stale
+}
+
 test "chunk: verify rejects jump target into instruction body" {
     var rt = try setup();
     defer rt.deinit();
@@ -6738,6 +6955,286 @@ test "cap:fs read/write/exists/list/delete/mkdir round-trip through a real temp 
     }
 }
 
+// Fake host driver for cap:fs tests below: an in-memory virtual filesystem
+// backing a `.driver` mount (fs_state.MountKind.driver), exercising
+// cap_fs.zig's driver-path branches (the `if (lr.mount.kind == .driver)`
+// blocks at the top of each dispatch case) that the real-tmpdir test above
+// never reaches, since that one only ever registers a `.real_path` mount.
+// Same idea as FakeCapHttpState/fakeCapHttpHandler and FakeCapNetState/
+// fake_cap_net_handlers above: deterministic, hermetic stand-ins for a host
+// driver so read/exists/write/list/delete/mkdir's full marshaling can be
+// exercised without a real filesystem.
+const FakeFsDriverState = struct {
+    // fs.read
+    file_contents: []const u8 = "",
+    read_pos: usize = 0,
+    chunk_len: usize = 4, // small on purpose: forces cap_fs_read's
+    // 4096-byte-buffer read loop to run multiple iterations and accumulate
+    // via chunks.appendSlice, instead of finishing in one call.
+    open_should_fail: bool = false,
+
+    // fs.write
+    write_seen: [256]u8 = undefined,
+    write_seen_len: usize = 0,
+
+    // fs.exists
+    exists_result: i32 = 1,
+
+    // fs.list: caller-provided NUL-packed names blob, returned verbatim.
+    list_names: []const u8 = "",
+
+    // Observed calls/paths: also proves lr.rest (the path with the mount
+    // name stripped, e.g. "vfs/foo.txt" -> "foo.txt") is what reaches the
+    // driver, not the full mount-qualified script path.
+    last_open_path: [64]u8 = undefined,
+    last_open_path_len: usize = 0,
+    last_open_mode: i32 = -1,
+    last_list_path: [64]u8 = undefined,
+    last_list_path_len: usize = 0,
+    last_unlink_path: [64]u8 = undefined,
+    last_unlink_path_len: usize = 0,
+    last_mkdir_path: [64]u8 = undefined,
+    last_mkdir_path_len: usize = 0,
+    unlink_calls: u32 = 0,
+    mkdir_calls: u32 = 0,
+};
+
+fn fakeFsOpen(userdata: ?*anyopaque, path_ptr: [*]const u8, path_len: i32, mode: i32, out_fd: *i32) callconv(.c) i32 {
+    const st: *FakeFsDriverState = @ptrCast(@alignCast(userdata.?));
+    if (st.open_should_fail) return -1;
+    const n: usize = @intCast(path_len);
+    @memcpy(st.last_open_path[0..n], path_ptr[0..n]);
+    st.last_open_path_len = n;
+    st.last_open_mode = mode;
+    if (mode == 0) st.read_pos = 0;
+    out_fd.* = 7;
+    return 0;
+}
+
+fn fakeFsRead(userdata: ?*anyopaque, fd: i32, buf: [*]u8, buf_len: i32) callconv(.c) i32 {
+    _ = fd;
+    const st: *FakeFsDriverState = @ptrCast(@alignCast(userdata.?));
+    const remaining = st.file_contents.len - st.read_pos;
+    if (remaining == 0) return 0;
+    const n = @min(@min(remaining, st.chunk_len), @as(usize, @intCast(buf_len)));
+    @memcpy(buf[0..n], st.file_contents[st.read_pos..][0..n]);
+    st.read_pos += n;
+    return @intCast(n);
+}
+
+fn fakeFsWrite(userdata: ?*anyopaque, fd: i32, data: [*]const u8, len: i32) callconv(.c) i32 {
+    _ = fd;
+    const st: *FakeFsDriverState = @ptrCast(@alignCast(userdata.?));
+    const n: usize = @intCast(len);
+    @memcpy(st.write_seen[0..n], data[0..n]);
+    st.write_seen_len = n;
+    return @intCast(n);
+}
+
+fn fakeFsClose(userdata: ?*anyopaque, fd: i32) callconv(.c) void {
+    _ = userdata;
+    _ = fd;
+}
+
+fn fakeFsExists(userdata: ?*anyopaque, path_ptr: [*]const u8, path_len: i32) callconv(.c) i32 {
+    _ = path_ptr;
+    _ = path_len;
+    const st: *FakeFsDriverState = @ptrCast(@alignCast(userdata.?));
+    return st.exists_result;
+}
+
+fn fakeFsList(userdata: ?*anyopaque, path_ptr: [*]const u8, path_len: i32, out_buf: [*]u8, out_buf_len: i32) callconv(.c) i32 {
+    const st: *FakeFsDriverState = @ptrCast(@alignCast(userdata.?));
+    const pn: usize = @intCast(path_len);
+    @memcpy(st.last_list_path[0..pn], path_ptr[0..pn]);
+    st.last_list_path_len = pn;
+    const n = st.list_names.len;
+    if (n > @as(usize, @intCast(out_buf_len))) return -1;
+    @memcpy(out_buf[0..n], st.list_names);
+    return @intCast(n);
+}
+
+fn fakeFsUnlink(userdata: ?*anyopaque, path_ptr: [*]const u8, path_len: i32) callconv(.c) i32 {
+    const st: *FakeFsDriverState = @ptrCast(@alignCast(userdata.?));
+    const n: usize = @intCast(path_len);
+    @memcpy(st.last_unlink_path[0..n], path_ptr[0..n]);
+    st.last_unlink_path_len = n;
+    st.unlink_calls += 1;
+    return 0;
+}
+
+fn fakeFsMkdir(userdata: ?*anyopaque, path_ptr: [*]const u8, path_len: i32) callconv(.c) i32 {
+    const st: *FakeFsDriverState = @ptrCast(@alignCast(userdata.?));
+    const n: usize = @intCast(path_len);
+    @memcpy(st.last_mkdir_path[0..n], path_ptr[0..n]);
+    st.last_mkdir_path_len = n;
+    st.mkdir_calls += 1;
+    return 0;
+}
+
+const fake_fs_driver: fs_state_mod.FsDriver = .{
+    .open = fakeFsOpen,
+    .read = fakeFsRead,
+    .write = fakeFsWrite,
+    .close = fakeFsClose,
+    .exists = fakeFsExists,
+    .list = fakeFsList,
+    .unlink = fakeFsUnlink,
+    .mkdir = fakeFsMkdir,
+};
+
+test "cap:fs driver mount: read/exists/write/list/delete/mkdir all go through host callback functions" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{"fs"},
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    switch (rt.run(
+        \\std := import("std")
+        \\fs := import("cap:fs")
+        \\func doRead() string { return fs.read("vfs/foo.txt") }
+        \\func doExistsTrue() bool { return fs.exists("vfs/foo.txt") }
+        \\func doExistsFalse() bool { return fs.exists("vfs/missing.txt") }
+        \\func doWrite() bool { fs.write("vfs/foo.txt", "written-content"); return true }
+        \\func doListLen() int {
+        \\    names := fs.list("vfs/somedir")
+        \\    return std.core.len(names)
+        \\}
+        \\func doListItem0() string {
+        \\    names := fs.list("vfs/somedir")
+        \\    return names[0]
+        \\}
+        \\func doListItem1() string {
+        \\    names := fs.list("vfs/somedir")
+        \\    return names[1]
+        \\}
+        \\func doDelete() bool { fs.delete("vfs/foo.txt"); return true }
+        \\func doMkdir() bool { fs.mkdir("vfs/newdir"); return true }
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+
+    // Two names ("alpha", "beta") followed by a doubled NUL before "gamma":
+    // exercises both the normal multi-name parse and cap_fs.zig's
+    // `if (end == pos) break` early-stop-on-empty-name path in the same
+    // buffer — "gamma" must NOT show up in the result.
+    var state = FakeFsDriverState{
+        .file_contents = "Hello, virtual world!",
+        .list_names = "alpha\x00beta\x00\x00gamma\x00",
+    };
+    // Registered after run(), same reasoning as the real-tmpdir/http/net
+    // fake-handler tests above: run() re-pins the process-wide active-state
+    // pointer, which would wipe out a mount registered before that pin
+    // lands. Runtime.setFsMounts (api.zig) only builds .real_path mounts, so
+    // a .driver mount goes straight through fs_state onto the inner
+    // Runtime's own mount table.
+    try fs_state_mod.addDriverMountToState(&rt.inner.fs_mounts, "vfs", fake_fs_driver, @ptrCast(&state));
+
+    switch (rt.call("doRead", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("Hello, virtual world!", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    try std.testing.expectEqualStrings("foo.txt", state.last_open_path[0..state.last_open_path_len]);
+    try std.testing.expectEqual(@as(i32, 0), state.last_open_mode);
+
+    switch (rt.call("doExistsTrue", &.{})) {
+        .ok => |v| try std.testing.expect(v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    state.exists_result = 0;
+    switch (rt.call("doExistsFalse", &.{})) {
+        .ok => |v| try std.testing.expect(!v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+
+    switch (rt.call("doWrite", &.{})) {
+        .ok => |v| try std.testing.expect(v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    try std.testing.expectEqualStrings("written-content", state.write_seen[0..state.write_seen_len]);
+    try std.testing.expectEqual(@as(i32, 1), state.last_open_mode);
+
+    switch (rt.call("doListLen", &.{})) {
+        .ok => |v| try std.testing.expectEqual(@as(i64, 2), v.int),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    switch (rt.call("doListItem0", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("alpha", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    switch (rt.call("doListItem1", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("beta", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    try std.testing.expectEqualStrings("somedir", state.last_list_path[0..state.last_list_path_len]);
+
+    switch (rt.call("doDelete", &.{})) {
+        .ok => |v| try std.testing.expect(v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    try std.testing.expectEqual(@as(u32, 1), state.unlink_calls);
+    try std.testing.expectEqualStrings("foo.txt", state.last_unlink_path[0..state.last_unlink_path_len]);
+
+    switch (rt.call("doMkdir", &.{})) {
+        .ok => |v| try std.testing.expect(v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    try std.testing.expectEqual(@as(u32, 1), state.mkdir_calls);
+    try std.testing.expectEqualStrings("newdir", state.last_mkdir_path[0..state.last_mkdir_path_len]);
+}
+
+// A driver mount can leave individual callback fields null (an embedder only
+// implementing a read-only view, say), and a host driver callback can report
+// failure via a negative return code. cap_fs.zig's driver branches guard
+// both: `drv.<fn> orelse return error.CapabilityError` for a missing
+// callback, and `if (<fn>(...) < 0) return error.CapabilityError` for a
+// negative rc. Both must surface to the script as a CapabilityError runtime
+// error, exactly like the .wasi CapabilityNotAvailable branches already
+// covered by the real-tmpdir test's platform.
+test "cap:fs driver mount: missing callback and negative host rc both surface as CapabilityError" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{"fs"},
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    switch (rt.run(
+        \\fs := import("cap:fs")
+        \\func doRead() string { return fs.read("noread/foo.txt") }
+        \\func doWrite() { fs.write("failopen/foo.txt", "x") }
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+
+    // open/close wired but read left null: cap_fs_read's
+    // `drv.read orelse return error.CapabilityError` guard.
+    const no_read_driver: fs_state_mod.FsDriver = .{
+        .open = fakeFsOpen,
+        .close = fakeFsClose,
+    };
+    var no_read_state = FakeFsDriverState{};
+    try fs_state_mod.addDriverMountToState(&rt.inner.fs_mounts, "noread", no_read_driver, @ptrCast(&no_read_state));
+
+    // open() reports failure (negative rc): cap_fs_write's
+    // `if (open_fn(...) < 0) return error.CapabilityError` branch.
+    var fail_open_state = FakeFsDriverState{ .open_should_fail = true };
+    try fs_state_mod.addDriverMountToState(&rt.inner.fs_mounts, "failopen", fake_fs_driver, @ptrCast(&fail_open_state));
+
+    switch (rt.call("doRead", &.{})) {
+        .runtime_error => |e| try std.testing.expectEqual(error.CapabilityError, e.kind),
+        .ok => return error.ExpectedCapabilityError,
+    }
+    switch (rt.call("doWrite", &.{})) {
+        .runtime_error => |e| try std.testing.expectEqual(error.CapabilityError, e.kind),
+        .ok => return error.ExpectedCapabilityError,
+    }
+}
+
 // cap:http's dispatch() validates the fetch() options map (method/body/
 // timeout_ms/headers types, and the opts argument itself) before ever
 // calling http_state.httpFetch — so these TypeError branches need no
@@ -8500,4 +8997,365 @@ test "compiler: std.core.deep_equal treats an append-grown array as equal to an 
     try std.testing.expect(r4.boolean);
     const r5 = try rt.callGlobal("sameDeclaredNamedTypeEqual", &.{});
     try std.testing.expect(r5.boolean);
+}
+
+// ── core.zig coverage sweep: is_int/is_float/is_string/is_array/is_map/
+// is_struct/is_null, has/delete/keys/values/contains/remove, clone,
+// type_of on rarer kinds, std.conv.to_bool, and the object (dyn_string/
+// string_view) branch of std.conv.to_int/to_float. None of these were
+// exercised anywhere in this file before (grepped for `core\.is_`,
+// `core\.has(`, `core\.delete(`, `core\.remove(`, `core\.contains(`,
+// `core\.keys(`, `core\.values(`, `core\.clone(`, `core\.gc_stats` and
+// found zero hits), despite core.zig implementing all of them.
+test "compiler: std.core.is_int/is_float/is_string/is_array/is_map/is_struct/is_null classify plain and named values" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Meter int
+        \\type Speed float
+        \\type Name string
+        \\type ScoreList []int
+        \\type ScoreMap [string]int
+        \\type Point struct { x int, y int }
+        \\func isIntPlain() bool { return std.core.is_int(5) }
+        \\func isIntWholeFloat() bool { return std.core.is_int(5.0) }
+        \\func isIntFractionalFloat() bool { return std.core.is_int(5.5) }
+        \\func isIntNamed() bool { return std.core.is_int(Meter(5)) }
+        \\func isIntString() bool { return std.core.is_int("5") }
+        \\func isFloatPlain() bool { return std.core.is_float(5.5) }
+        \\func isFloatWhole() bool { return std.core.is_float(5.0) }
+        \\func isFloatInt() bool { return std.core.is_float(5) }
+        \\func isFloatNamed() bool { return std.core.is_float(Speed(2.5)) }
+        \\func isStringPlain() bool { return std.core.is_string("hi") }
+        \\func isStringNamed() bool { return std.core.is_string(Name("hi")) }
+        \\func isStringInt() bool { return std.core.is_string(5) }
+        \\func isArrayPlain() bool { return std.core.is_array([1, 2, 3]) }
+        \\func isArrayAnon() bool { return std.core.is_array([]int{1, 2, 3}) }
+        \\func isArrayNamed() bool { return std.core.is_array(ScoreList([1, 2])) }
+        \\func isArrayMap() bool { return std.core.is_array({"a": 1}) }
+        \\func isMapPlain() bool { return std.core.is_map({"a": 1}) }
+        \\func isMapNamed() bool { return std.core.is_map(ScoreMap({"a": 1})) }
+        \\func isMapArray() bool { return std.core.is_map([1, 2]) }
+        \\func isStructPlain() bool { return std.core.is_struct(Point{x: 1, y: 2}) }
+        \\func isStructInt() bool { return std.core.is_struct(5) }
+        \\func isNullPlain() bool { return std.core.is_null(null) }
+        \\func isNullZero() bool { return std.core.is_null(0) }
+    );
+    try std.testing.expect((try rt.callGlobal("isIntPlain", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isIntWholeFloat", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("isIntFractionalFloat", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isIntNamed", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("isIntString", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isFloatPlain", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("isFloatWhole", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("isFloatInt", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isFloatNamed", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isStringPlain", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isStringNamed", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("isStringInt", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isArrayPlain", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isArrayAnon", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isArrayNamed", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("isArrayMap", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isMapPlain", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isMapNamed", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("isMapArray", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isStructPlain", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("isStructInt", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isNullPlain", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("isNullZero", &.{})).boolean);
+}
+
+test "compiler: std.core.has/delete/keys/values/contains/remove cover map+array success and edge-case paths" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func hasPresent() bool { m := {"a": 1, "b": 2}; return std.core.has(m, "a") }
+        \\func hasMissing() bool { m := {"a": 1}; return std.core.has(m, "z") }
+        \\func deleteExisting() int { m := {"a": 1, "b": 2}; return std.core.delete(m, "a") }
+        \\func deleteExistingShrinks() bool {
+        \\    m := {"a": 1, "b": 2}
+        \\    _ = std.core.delete(m, "a")
+        \\    return std.core.len(m) == 1 and not std.core.has(m, "a") and std.core.has(m, "b")
+        \\}
+        \\func deleteMissingIsNull() bool {
+        \\    m := {"a": 1}
+        \\    removed := std.core.delete(m, "z")
+        \\    return std.core.is_null(removed) and std.core.len(m) == 1
+        \\}
+        \\func keysAndValues() bool {
+        \\    m := {"a": 1, "b": 2}
+        \\    ks := std.core.keys(m)
+        \\    vs := std.core.values(m)
+        \\    return std.core.len(ks) == 2 and std.core.len(vs) == 2 and std.core.contains(ks, "a") and std.core.contains(ks, "b") and std.core.contains(vs, 1) and std.core.contains(vs, 2)
+        \\}
+        \\func containsPresent() bool { return std.core.contains([1, 2, 3], 2) }
+        \\func containsAbsent() bool { return std.core.contains([1, 2, 3], 9) }
+        \\func removeMiddle() bool {
+        \\    a := [1, 2, 3]
+        \\    b := std.core.remove(a, 1)
+        \\    return std.core.deep_equal(b, [1, 3]) and std.core.deep_equal(a, [1, 2, 3])
+        \\}
+        \\func removeLastElement() bool {
+        \\    a := [42]
+        \\    b := std.core.remove(a, 0)
+        \\    return std.core.len(b) == 0
+        \\}
+        \\func removeOutOfRange() []int { a := [1, 2, 3]; return std.core.remove(a, 5) }
+        \\func removeNegative() []int { a := [1, 2, 3]; return std.core.remove(a, -1) }
+    );
+    try std.testing.expect((try rt.callGlobal("hasPresent", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("hasMissing", &.{})).boolean);
+    try std.testing.expectEqual(@as(i64, 1), (try rt.callGlobal("deleteExisting", &.{})).int);
+    try std.testing.expect((try rt.callGlobal("deleteExistingShrinks", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("deleteMissingIsNull", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("keysAndValues", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("containsPresent", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("containsAbsent", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("removeMiddle", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("removeLastElement", &.{})).boolean);
+    try std.testing.expectError(error.IndexOutOfBounds, rt.callGlobal("removeOutOfRange", &.{}));
+    try std.testing.expectError(error.IndexOutOfBounds, rt.callGlobal("removeNegative", &.{}));
+}
+
+// The real behavioral contract of std.core.clone is that it is a DEEP copy:
+// mutating the clone's nested array/map (arrays/maps are reference types in
+// Gengo, mutated in place through any alias) must never affect the
+// original. A shallow/reference "clone" would fail every assertion below.
+test "compiler: std.core.clone deep-copies nested arrays/maps/structs; mutating the clone leaves the original untouched" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Box struct {
+        \\    items []int,
+        \\    tags map[string]int,
+        \\}
+        \\type Wide struct {
+        \\    a int,
+        \\    b int,
+        \\    c int,
+        \\    d int,
+        \\    e int,
+        \\}
+        \\func arrayIndependence() bool {
+        \\    original := [1, 2, 3]
+        \\    var copy []int = std.core.clone(original)
+        \\    copy[0] = 999
+        \\    return original[0] == 1 and copy[0] == 999
+        \\}
+        \\func mapIndependence() bool {
+        \\    original := {"a": 1}
+        \\    var copy map[string]int = std.core.clone(original)
+        \\    copy["a"] = 999
+        \\    return original["a"] == 1 and copy["a"] == 999
+        \\}
+        \\func smallStructIndependence() bool {
+        \\    original := Box{items: [1, 2, 3], tags: {"x": 1}}
+        \\    var copy Box = std.core.clone(original)
+        \\    items := copy.items
+        \\    items[0] = 999
+        \\    tags := copy.tags
+        \\    tags["x"] = 999
+        \\    return original.items[0] == 1 and copy.items[0] == 999 and original.tags["x"] == 1 and copy.tags["x"] == 999
+        \\}
+        \\func wideStructIndependence() bool {
+        \\    original := Wide{a: 1, b: 2, c: 3, d: 4, e: 5}
+        \\    var copy Wide = std.core.clone(original)
+        \\    copy.a = 999
+        \\    return original.a == 1 and copy.a == 999 and copy.e == 5
+        \\}
+        \\func stringCloneRoundTrips() bool {
+        \\    original := "hello"
+        \\    copy := std.core.clone(original)
+        \\    return copy == "hello"
+        \\}
+    );
+    try std.testing.expect((try rt.callGlobal("arrayIndependence", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("mapIndependence", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("smallStructIndependence", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("wideStructIndependence", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("stringCloneRoundTrips", &.{})).boolean);
+}
+
+// cloneObject's CloneVisit tracking (cloneFindExisting/cloneRemember) mirrors
+// deep_equal's cycle-guard, but was otherwise unexercised: a struct can
+// reference its own type through a `[]Node` field (structs are heap
+// objects, so this needs no forward-declaration trick), and appending the
+// struct's own local binding into that field builds a genuine one-hop
+// cycle straight from Gengo source. If clone() didn't track already-cloned
+// objects, cloning this would recurse forever / stack-overflow.
+test "compiler: std.core.clone on a self-referential struct terminates and stays independent" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Node struct {
+        \\    val int,
+        \\    children []Node,
+        \\}
+        \\func selfCycle() bool {
+        \\    n := Node{val: 1, children: []Node{}}
+        \\    n.children = std.core.append(n.children, n)
+        \\    var copy Node = std.core.clone(n)
+        \\    copy.val = 999
+        \\    return n.val == 1 and copy.val == 999 and std.core.len(copy.children) == 1
+        \\}
+    );
+    try std.testing.expect((try rt.callGlobal("selfCycle", &.{})).boolean);
+}
+
+test "compiler: std.core.type_of covers variant/enum/error/named-error/function/string_view values" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Shape variant {
+        \\    circle { radius float },
+        \\    tag(label string),
+        \\    point,
+        \\}
+        \\type Color enum { red, green, blue }
+        \\type MyErr error
+        \\func typeOfVariantInline() string { return std.core.type_of(Shape.point) }
+        \\func typeOfVariantRecord() string { return std.core.type_of(Shape.circle{radius: 5.0}) }
+        \\func typeOfVariantPayload() string { return std.core.type_of(Shape.tag("hi")) }
+        \\func typeOfEnum() string { return std.core.type_of(Color.red) }
+        \\func typeOfPlainError() string { return std.core.type_of(std.core.error("boom")) }
+        \\func typeOfNamedError() string { return std.core.type_of(MyErr("boom")) }
+        \\func typeOfFunc() string {
+        \\    f := func() int { return 1 }
+        \\    return std.core.type_of(f)
+        \\}
+        \\func typeOfStringView() string {
+        \\    s := std.bytes.slice(std.conv.to_string(12345), 1, 3)
+        \\    return std.core.type_of(s)
+        \\}
+    );
+    try std.testing.expectEqualStrings("Shape", try vms.asStringValue(try rt.callGlobal("typeOfVariantInline", &.{})));
+    try std.testing.expectEqualStrings("Shape", try vms.asStringValue(try rt.callGlobal("typeOfVariantRecord", &.{})));
+    try std.testing.expectEqualStrings("Shape", try vms.asStringValue(try rt.callGlobal("typeOfVariantPayload", &.{})));
+    try std.testing.expectEqualStrings("Color", try vms.asStringValue(try rt.callGlobal("typeOfEnum", &.{})));
+    try std.testing.expectEqualStrings("error", try vms.asStringValue(try rt.callGlobal("typeOfPlainError", &.{})));
+    try std.testing.expectEqualStrings("MyErr", try vms.asStringValue(try rt.callGlobal("typeOfNamedError", &.{})));
+    try std.testing.expectEqualStrings("func", try vms.asStringValue(try rt.callGlobal("typeOfFunc", &.{})));
+    try std.testing.expectEqualStrings("string", try vms.asStringValue(try rt.callGlobal("typeOfStringView", &.{})));
+}
+
+// std.conv.to_bool has NO compiler intrinsic lowering to cast_bool (unlike
+// to_int/to_float/to_string — see selectStdConvIntrinsicOp, which never
+// mentions to_bool), so every call below always reaches nativeConvToBool
+// via the native-call path regardless of the argument's static type.
+test "compiler: std.conv.to_bool covers every source Value/Object kind" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Flag bool
+        \\type Money decimal 2
+        \\type MyErr error
+        \\func boolTrue() bool { return std.conv.to_bool(true) }
+        \\func boolFalse() bool { return std.conv.to_bool(false) }
+        \\func intZero() bool { return std.conv.to_bool(0) }
+        \\func intNonzero() bool { return std.conv.to_bool(5) }
+        \\func floatZero() bool { return std.conv.to_bool(0.0) }
+        \\func floatNonzero() bool { return std.conv.to_bool(1.5) }
+        \\func runeNonzero() bool { return std.conv.to_bool('a') }
+        \\func emptyString() bool { return std.conv.to_bool("") }
+        \\func nonEmptyString() bool { return std.conv.to_bool("hi") }
+        \\func nullValue() bool { return std.conv.to_bool(null) }
+        \\func namedBoolTrue() bool { return std.conv.to_bool(Flag(true)) }
+        \\func namedBoolFalse() bool { return std.conv.to_bool(Flag(false)) }
+        \\func decimalZero() bool { return std.conv.to_bool(Money(0.00)) }
+        \\func decimalNonzero() bool { return std.conv.to_bool(Money(9.99)) }
+        \\func plainErrorVal() bool { return std.conv.to_bool(std.core.error("boom")) }
+        \\func namedErrorVal() bool { return std.conv.to_bool(MyErr("boom")) }
+        \\func dynStringNonEmpty() bool { return std.conv.to_bool(std.conv.to_string(123)) }
+        \\func stringViewNonEmpty() bool { return std.conv.to_bool(std.bytes.slice(std.conv.to_string(12345), 1, 3)) }
+        \\func arrayIsAlwaysTrue() bool { return std.conv.to_bool([1, 2, 3]) }
+        \\func emptyArrayIsAlwaysTrue() bool { return std.conv.to_bool([]int{}) }
+    );
+    try std.testing.expect((try rt.callGlobal("boolTrue", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("boolFalse", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("intZero", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("intNonzero", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("floatZero", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("floatNonzero", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("runeNonzero", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("emptyString", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("nonEmptyString", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("nullValue", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("namedBoolTrue", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("namedBoolFalse", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("decimalZero", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("decimalNonzero", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("plainErrorVal", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("namedErrorVal", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("dynStringNonEmpty", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("stringViewNonEmpty", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("arrayIsAlwaysTrue", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("emptyArrayIsAlwaysTrue", &.{})).boolean);
+}
+
+// std.conv.to_int/to_float only lower to cast_int/cast_float for a
+// provably non-string static type (selectStdConvIntrinsicOp); a runtime
+// string built via concatenation or std.bytes.slice keeps them on the
+// native-call path, exercising nativeConvToInt/Float's `.object` branch
+// (dyn_string/string_view, as opposed to the interned `.string` tag a
+// literal produces) instead of the VM's cast_int/cast_float ops.
+test "compiler: std.conv.to_int/to_float exercise the dyn_string/string_view object conversion path" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func intFromDynStringOk() int { s := std.conv.to_string(123); return std.conv.to_int(s) }
+        \\func intFromDynStringBad() int { s := std.conv.to_string(123) + "x"; return std.conv.to_int(s) }
+        \\func floatFromDynStringOk() float { s := std.conv.to_string(1.5); return std.conv.to_float(s) }
+        \\func floatFromDynStringBad() float { s := std.conv.to_string(1.5) + "z"; return std.conv.to_float(s) }
+        \\func intFromStringViewOk() int {
+        \\    s := std.bytes.slice(std.conv.to_string(12345), 1, 3)
+        \\    return std.conv.to_int(s)
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 123), (try rt.callGlobal("intFromDynStringOk", &.{})).int);
+    try std.testing.expectError(error.TypeError, rt.callGlobal("intFromDynStringBad", &.{}));
+    try std.testing.expectApproxEqAbs(@as(f64, 1.5), (try rt.callGlobal("floatFromDynStringOk", &.{})).float, 1e-9);
+    try std.testing.expectError(error.TypeError, rt.callGlobal("floatFromDynStringBad", &.{}));
+    try std.testing.expectEqual(@as(i64, 23), (try rt.callGlobal("intFromStringViewOk", &.{})).int);
+}
+
+// std.core.gc_stats/gc_stats_ext were never called anywhere in this file
+// before; field values are runtime/GC-state-dependent so only their
+// presence and sane (non-negative / positive-heap-size) bounds are
+// checked, not exact numbers. Also covers std.core.gc, gc_live_objects,
+// error, and is_error's .named_error_value branch (previously only its
+// plain .error_value branch was exercised, via the cap:net tests).
+test "compiler: std.core.gc_stats/gc_stats_ext report sane fields; gc/gc_live_objects/error/is_error(named error) round-trip" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type MyErr error
+        \\func gcStatsHasFields() bool {
+        \\    stats := std.core.gc_stats()
+        \\    return std.core.has(stats, "heap_used_bytes") and std.core.has(stats, "heap_size_bytes") and std.core.has(stats, "live_objects") and stats["heap_size_bytes"] > 0 and stats["heap_used_bytes"] >= 0 and stats["live_objects"] >= 0
+        \\}
+        \\func gcStatsExtHasFields() bool {
+        \\    stats := std.core.gc_stats_ext()
+        \\    ok := std.core.has(stats, "heap_used_bytes") and std.core.has(stats, "heap_size_bytes") and std.core.has(stats, "live_objects") and std.core.has(stats, "gc_runs") and std.core.has(stats, "gc_time_ns") and std.core.has(stats, "alloc_object_calls") and std.core.has(stats, "alloc_managed_slice_calls") and std.core.has(stats, "alloc_managed_bytes_calls")
+        \\    return ok and stats["heap_size_bytes"] > 0 and stats["gc_runs"] >= 0 and stats["gc_time_ns"] >= 0 and stats["alloc_object_calls"] >= 0 and stats["alloc_managed_slice_calls"] >= 0 and stats["alloc_managed_bytes_calls"] >= 0
+        \\}
+        \\func gcDoesNotCrash() bool { std.core.gc(); return true }
+        \\func gcLiveObjectsNonNegative() bool { return std.core.gc_live_objects() >= 0 }
+        \\func errorRoundTrip() bool { e := std.core.error("boom"); return std.core.is_error(e) }
+        \\func namedErrorIsError() bool { return std.core.is_error(MyErr("boom")) }
+    );
+    try std.testing.expect((try rt.callGlobal("gcStatsHasFields", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("gcStatsExtHasFields", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("gcDoesNotCrash", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("gcLiveObjectsNonNegative", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("errorRoundTrip", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("namedErrorIsError", &.{})).boolean);
 }
