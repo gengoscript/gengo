@@ -535,3 +535,181 @@ test "httpFetch rejects CRLF in method or headers before any dispatch" {
     try headers2.put("X-Bad\r\nX-Injected", "value");
     try testing.expectError(error.InvalidRequest, httpFetch("GET", "http://example.com/", null, headers2, 0));
 }
+
+// httpExchange takes already-abstracted *std.Io.Reader/*std.Io.Writer, so the
+// request-building and response-parsing halves can be exercised directly
+// with a Writer.Allocating (to capture/discard the outgoing request) and a
+// Reader.fixed preloaded with a canned HTTP/1.1 response, with no real
+// socket involved.
+
+test "httpExchange parses a 200 response with a Content-Length body" {
+    const uri = try std.Uri.parse("http://example.com/path?q=1");
+    var req_alloc = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer req_alloc.deinit();
+    var resp_reader = std.Io.Reader.fixed("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello");
+
+    var result = try httpExchange("GET", uri, "example.com", null, null, &resp_reader, &req_alloc.writer);
+    defer result.deinit();
+
+    try testing.expectEqual(@as(i32, 200), result.status);
+    try testing.expect(result.ok);
+    try testing.expectEqualStrings("hello", result.body);
+}
+
+test "httpExchange sets ok=false for a non-2xx status" {
+    const uri = try std.Uri.parse("http://example.com/");
+    var req_alloc = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer req_alloc.deinit();
+    var resp_reader = std.Io.Reader.fixed("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nnope!");
+
+    var result = try httpExchange("GET", uri, "example.com", null, null, &resp_reader, &req_alloc.writer);
+    defer result.deinit();
+
+    try testing.expectEqual(@as(i32, 500), result.status);
+    try testing.expect(!result.ok);
+    try testing.expectEqualStrings("nope!", result.body);
+}
+
+test "httpExchange reassembles a chunked-transfer-encoded body" {
+    const uri = try std.Uri.parse("http://example.com/");
+    var req_alloc = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer req_alloc.deinit();
+    var resp_reader = std.Io.Reader.fixed("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" ++
+        "5\r\nhello\r\n" ++
+        "6\r\n world\r\n" ++
+        "0\r\n\r\n");
+
+    var result = try httpExchange("GET", uri, "example.com", null, null, &resp_reader, &req_alloc.writer);
+    defer result.deinit();
+
+    try testing.expectEqual(@as(i32, 200), result.status);
+    try testing.expectEqualStrings("hello world", result.body);
+}
+
+test "httpExchange rejects a Content-Length above the response size cap" {
+    const uri = try std.Uri.parse("http://example.com/");
+    var req_alloc = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer req_alloc.deinit();
+    // 70_000_000 > MaxResponseBodyBytes (64 MiB); the check fires before any
+    // body bytes are read, so the fixed reader need not contain a body.
+    var resp_reader = std.Io.Reader.fixed("HTTP/1.1 200 OK\r\nContent-Length: 70000000\r\n\r\n");
+
+    try testing.expectError(error.ResponseTooLarge, httpExchange("GET", uri, "example.com", null, null, &resp_reader, &req_alloc.writer));
+}
+
+test "httpExchange rejects an oversized chunk size in a chunked response" {
+    const uri = try std.Uri.parse("http://example.com/");
+    var req_alloc = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer req_alloc.deinit();
+    // 0x5000000 == 83_886_080 bytes, over the 64 MiB cap; the size check
+    // fires right after parsing the hex chunk-size line, before any chunk
+    // data would be read.
+    var resp_reader = std.Io.Reader.fixed("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5000000\r\n");
+
+    try testing.expectError(error.ResponseTooLarge, httpExchange("GET", uri, "example.com", null, null, &resp_reader, &req_alloc.writer));
+}
+
+test "httpExchange reads an unbounded body to EOF when no Content-Length or chunking is present" {
+    const uri = try std.Uri.parse("http://example.com/");
+    var req_alloc = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer req_alloc.deinit();
+    var resp_reader = std.Io.Reader.fixed("HTTP/1.1 200 OK\r\n\r\nsome body text");
+
+    var result = try httpExchange("GET", uri, "example.com", null, null, &resp_reader, &req_alloc.writer);
+    defer result.deinit();
+
+    try testing.expectEqualStrings("some body text", result.body);
+}
+
+test "httpExchange rejects a response with no parseable status line" {
+    const uri = try std.Uri.parse("http://example.com/");
+
+    var req_alloc1 = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer req_alloc1.deinit();
+    var empty_reader = std.Io.Reader.fixed("");
+    try testing.expectError(error.InvalidResponse, httpExchange("GET", uri, "example.com", null, null, &empty_reader, &req_alloc1.writer));
+
+    var req_alloc2 = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer req_alloc2.deinit();
+    var bad_status_reader = std.Io.Reader.fixed("HTTP/1.1 notanumber OK\r\n\r\n");
+    try testing.expectError(error.InvalidResponse, httpExchange("GET", uri, "example.com", null, null, &bad_status_reader, &req_alloc2.writer));
+}
+
+test "httpExchange parses response headers with names/values split on the first colon and trimmed" {
+    const uri = try std.Uri.parse("http://example.com/");
+    var req_alloc = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer req_alloc.deinit();
+    var resp_reader = std.Io.Reader.fixed("HTTP/1.1 200 OK\r\n" ++
+        "X-Custom: value1\r\n" ++
+        "X-Another:   value2\r\n" ++
+        "Content-Length: 2\r\n" ++
+        "\r\nhi");
+
+    var result = try httpExchange("GET", uri, "example.com", null, null, &resp_reader, &req_alloc.writer);
+    defer result.deinit();
+
+    try testing.expectEqualStrings("hi", result.body);
+    try testing.expectEqualStrings("value1", result.headers.get("X-Custom").?);
+    try testing.expectEqualStrings("value2", result.headers.get("X-Another").?);
+}
+
+test "httpExchange decompresses a gzip Content-Encoding body and rewrites the header to identity" {
+    const plaintext = "hello world";
+
+    // Compress `plaintext` into a real gzip stream using std.compress.flate,
+    // the same API httpExchange uses to decompress on the way in.
+    var flate_out_buf: [4096]u8 = undefined;
+    var flate_w: std.Io.Writer = .fixed(&flate_out_buf);
+    var deflate_buf: [std.compress.flate.max_window_len]u8 = undefined;
+    var compressor = try std.compress.flate.Compress.init(&flate_w, &deflate_buf, .gzip, .default);
+    try compressor.writer.writeAll(plaintext);
+    try compressor.finish();
+    const gzip_bytes = flate_w.buffered();
+
+    var response: std.ArrayList(u8) = .empty;
+    defer response.deinit(testing.allocator);
+    const header = try std.fmt.allocPrint(
+        testing.allocator,
+        "HTTP/1.1 200 OK\r\ncontent-encoding: gzip\r\nContent-Length: {d}\r\n\r\n",
+        .{gzip_bytes.len},
+    );
+    defer testing.allocator.free(header);
+    try response.appendSlice(testing.allocator, header);
+    try response.appendSlice(testing.allocator, gzip_bytes);
+
+    const uri = try std.Uri.parse("http://example.com/");
+    var req_alloc = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer req_alloc.deinit();
+    var resp_reader = std.Io.Reader.fixed(response.items);
+
+    var result = try httpExchange("GET", uri, "example.com", null, null, &resp_reader, &req_alloc.writer);
+    defer result.deinit();
+
+    try testing.expectEqual(@as(i32, 200), result.status);
+    try testing.expectEqualStrings(plaintext, result.body);
+    try testing.expectEqualStrings("identity", result.headers.get("content-encoding").?);
+}
+
+// httpFetch's CRLF check on the raw method/header strings runs before any
+// dispatch and is already covered above. httpExchange has its OWN, separate
+// check: the URI's path/query are percent-decoded via toRaw() inside
+// httpExchange itself, so a URL-encoded CRLF (%0d%0a) that only becomes a
+// literal CR/LF after decoding is a different code path, exercised here.
+test "httpExchange rejects a CRLF that only appears after percent-decoding the URI path" {
+    const uri = try std.Uri.parse("http://example.com/%0d%0aX-Injected:%20evil");
+    var req_alloc = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer req_alloc.deinit();
+    // No response bytes needed: the path is validated before anything is written or read.
+    var resp_reader = std.Io.Reader.fixed("");
+
+    try testing.expectError(error.InvalidRequest, httpExchange("GET", uri, "example.com", null, null, &resp_reader, &req_alloc.writer));
+}
+
+test "httpExchange rejects a CRLF that only appears after percent-decoding the URI query" {
+    const uri = try std.Uri.parse("http://example.com/path?q=%0d%0aX-Injected:%20evil");
+    var req_alloc = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer req_alloc.deinit();
+    var resp_reader = std.Io.Reader.fixed("");
+
+    try testing.expectError(error.InvalidRequest, httpExchange("GET", uri, "example.com", null, null, &resp_reader, &req_alloc.writer));
+}

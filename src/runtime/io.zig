@@ -526,3 +526,249 @@ fn printValueDepth(v: Value, depth: u32, ancestors: *[PrintMaxDepth]*const vmod.
         },
     }
 }
+
+const testing = std.testing;
+
+var test_capture_buf: [4096]u8 = undefined;
+var test_capture_len: usize = 0;
+var test_error_msg: vmod.StringSlice = .{ .bytes = "" };
+
+fn testCaptureWrite(s: []const u8) void {
+    @memcpy(test_capture_buf[test_capture_len..][0..s.len], s);
+    test_capture_len += s.len;
+}
+
+fn withCapture(comptime run: fn () void) []const u8 {
+    test_capture_len = 0;
+    setWriteOverrides(testCaptureWrite, testCaptureWrite);
+    run();
+    clearWriteOverrides();
+    return test_capture_buf[0..test_capture_len];
+}
+
+test "writeUint/writeInt format zero, positive, negative, and i64 min" {
+    try testing.expectEqualStrings("0", withCapture(struct {
+        fn f() void {
+            writeUint(0);
+        }
+    }.f));
+    try testing.expectEqualStrings("12345", withCapture(struct {
+        fn f() void {
+            writeUint(12345);
+        }
+    }.f));
+    try testing.expectEqualStrings("-42", withCapture(struct {
+        fn f() void {
+            writeInt(-42);
+        }
+    }.f));
+    try testing.expectEqualStrings("42", withCapture(struct {
+        fn f() void {
+            writeInt(42);
+        }
+    }.f));
+    // std.math.minInt(i64) has no positive i64 counterpart — formatInt's
+    // negation path must widen to u64 before negating, not `-v` on the i64.
+    try testing.expectEqualStrings("-9223372036854775808", withCapture(struct {
+        fn f() void {
+            writeInt(std.math.minInt(i64));
+        }
+    }.f));
+    try testing.expectEqualStrings("0", withCapture(struct {
+        fn f() void {
+            werrUint(0);
+        }
+    }.f));
+    try testing.expectEqualStrings("-7", withCapture(struct {
+        fn f() void {
+            werrInt(-7);
+        }
+    }.f));
+}
+
+test "writeF64 formats NaN, Inf, integers, fractions, and out-of-u64-range values" {
+    try testing.expectEqualStrings("NaN", withCapture(struct {
+        fn f() void {
+            writeF64(std.math.nan(f64));
+        }
+    }.f));
+    try testing.expectEqualStrings("Inf", withCapture(struct {
+        fn f() void {
+            writeF64(std.math.inf(f64));
+        }
+    }.f));
+    try testing.expectEqualStrings("-Inf", withCapture(struct {
+        fn f() void {
+            writeF64(-std.math.inf(f64));
+        }
+    }.f));
+    try testing.expectEqualStrings("5", withCapture(struct {
+        fn f() void {
+            writeF64(5.0);
+        }
+    }.f));
+    try testing.expectEqualStrings("-5", withCapture(struct {
+        fn f() void {
+            writeF64(-5.0);
+        }
+    }.f));
+    try testing.expectEqualStrings("3.5", withCapture(struct {
+        fn f() void {
+            writeF64(3.5);
+        }
+    }.f));
+    // Trailing zeros in the 6-digit fractional expansion are trimmed, but
+    // at least one digit always survives.
+    try testing.expectEqualStrings("1.25", withCapture(struct {
+        fn f() void {
+            writeF64(1.25);
+        }
+    }.f));
+    try testing.expectEqualStrings("?", withCapture(struct {
+        fn f() void {
+            writeF64(std.math.pow(f64, 2.0, 65.0));
+        }
+    }.f));
+}
+
+test "writeF64Prec formats at a fixed precision, including zero-precision and edge values" {
+    try testing.expectEqualStrings("3.14", withCapture(struct {
+        fn f() void {
+            writeF64Prec(3.14159, 2);
+        }
+    }.f));
+    try testing.expectEqualStrings("3", withCapture(struct {
+        fn f() void {
+            writeF64Prec(3.14159, 0);
+        }
+    }.f));
+    try testing.expectEqualStrings("-2.50", withCapture(struct {
+        fn f() void {
+            writeF64Prec(-2.5, 2);
+        }
+    }.f));
+    try testing.expectEqualStrings("NaN", withCapture(struct {
+        fn f() void {
+            writeF64Prec(std.math.nan(f64), 2);
+        }
+    }.f));
+    try testing.expectEqualStrings("Inf", withCapture(struct {
+        fn f() void {
+            writeF64Prec(std.math.inf(f64), 2);
+        }
+    }.f));
+    try testing.expectEqualStrings("?", withCapture(struct {
+        fn f() void {
+            writeF64Prec(std.math.pow(f64, 2.0, 65.0), 2);
+        }
+    }.f));
+}
+
+var test_read_chunks: []const []const u8 = &.{};
+var test_read_idx: usize = 0;
+
+fn testReadOverride(buf: []u8, is_line: bool) isize {
+    _ = is_line;
+    if (test_read_idx >= test_read_chunks.len) return -1;
+    const chunk_bytes = test_read_chunks[test_read_idx];
+    test_read_idx += 1;
+    @memcpy(buf[0..chunk_bytes.len], chunk_bytes);
+    return @intCast(chunk_bytes.len);
+}
+
+test "readAllBytesRaw loops the override until the buffer fills or a read fails" {
+    test_read_chunks = &.{ "ab", "cd", "ef" };
+    test_read_idx = 0;
+    setReadOverride(testReadOverride);
+    defer clearReadOverride();
+
+    var buf: [6]u8 = undefined;
+    const n = readAllBytesRaw(&buf);
+    try testing.expectEqual(@as(isize, 6), n);
+    try testing.expectEqualStrings("abcdef", &buf);
+
+    // Override exhausted (-1 on the next call) with a partially filled
+    // buffer still reports the partial count, not failure.
+    test_read_chunks = &.{"xy"};
+    test_read_idx = 0;
+    var buf2: [5]u8 = undefined;
+    const n2 = readAllBytesRaw(&buf2);
+    try testing.expectEqual(@as(isize, 2), n2);
+
+    // Override exhausted immediately (nothing ever read) reports -1.
+    test_read_chunks = &.{};
+    test_read_idx = 0;
+    var buf3: [4]u8 = undefined;
+    try testing.expectEqual(@as(isize, -1), readAllBytesRaw(&buf3));
+}
+
+test "readBytesRaw delegates whole-buffer reads straight to the override" {
+    test_read_chunks = &.{"hello"};
+    test_read_idx = 0;
+    setReadOverride(testReadOverride);
+    defer clearReadOverride();
+
+    var buf: [5]u8 = undefined;
+    const n = readBytesRaw(&buf, false);
+    try testing.expectEqual(@as(isize, 5), n);
+    try testing.expectEqualStrings("hello", &buf);
+}
+
+test "fireTrace calls the hook once per distinct line and skips repeats" {
+    const Rec = struct {
+        var hits: u32 = 0;
+        fn hook(userdata: ?*anyopaque, handle: i32, line: i32, col: i32) callconv(.c) void {
+            _ = userdata;
+            _ = handle;
+            _ = col;
+            _ = line;
+            hits += 1;
+        }
+    };
+    Rec.hits = 0;
+    try testing.expect(!traceActive());
+    setTrace(Rec.hook, null, 3);
+    defer clearTrace();
+    try testing.expect(traceActive());
+
+    fireTrace(1, 0);
+    fireTrace(1, 5); // same line, different column: still deduped
+    try testing.expectEqual(@as(u32, 1), Rec.hits);
+
+    fireTrace(2, 0);
+    try testing.expectEqual(@as(u32, 2), Rec.hits);
+
+    clearTrace();
+    try testing.expect(!traceActive());
+    fireTrace(3, 0);
+    try testing.expectEqual(@as(u32, 2), Rec.hits);
+}
+
+test "printValue renders scalars, strings, and null through the write override" {
+    try testing.expectEqualStrings("42", withCapture(struct {
+        fn f() void {
+            printValue(.{ .int = 42 });
+        }
+    }.f));
+    try testing.expectEqualStrings("true", withCapture(struct {
+        fn f() void {
+            printValue(.{ .boolean = true });
+        }
+    }.f));
+    try testing.expectEqualStrings("null", withCapture(struct {
+        fn f() void {
+            printValue(.null);
+        }
+    }.f));
+    test_error_msg = .{ .bytes = "boom" };
+    try testing.expectEqualStrings("error(boom)", withCapture(struct {
+        fn f() void {
+            printValue(.{ .error_value = &test_error_msg });
+        }
+    }.f));
+    try testing.expectEqualStrings("actor<2:7>", withCapture(struct {
+        fn f() void {
+            printValue(.{ .actor_ref = .{ .index = 2, .generation = 7 } });
+        }
+    }.f));
+}

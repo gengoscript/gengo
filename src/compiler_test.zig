@@ -6887,6 +6887,345 @@ test "cap:http get/post/fetch build a full Response struct through a fake host h
     try std.testing.expectEqual(@as(c_int, 1), state.seen_header_count);
 }
 
+// Fake host handler for cap:net tests below, same idea as FakeCapHttpState/
+// fakeCapHttpHandler above: a deterministic, hermetic stand-in for real
+// sockets so cap_net.zig's dispatch/marshaling branches (arg extraction,
+// Conn/Listener struct building, [ok, err] pair construction, the
+// DeadlineExceeded => "timeout" mapping) can be exercised without a real
+// network. Read/write loop back through a 2-slot buffer indexed by the host
+// handle (dial's fake handle is always 1, accept's is always 2), mirroring
+// net_state.zig's own FakeNetHandlerState/fakeDial/fakeRead/etc. test-block
+// fixtures (those are private to that file, so this is a fresh copy here).
+const FakeCapNetState = struct {
+    buf: [2][256]u8 = undefined,
+    buf_len: [2]usize = .{ 0, 0 },
+    buf_pos: [2]usize = .{ 0, 0 },
+    dial_handle: i32 = 1,
+    listener_handle: i32 = 50,
+    accept_handle: i32 = 2,
+    accept_should_block: bool = false,
+    close_calls: u32 = 0,
+    listener_close_calls: u32 = 0,
+    last_deadline_ms: i64 = -1,
+    last_read_deadline_ms: i64 = -1,
+    last_write_deadline_ms: i64 = -1,
+    last_accept_deadline_ms: i64 = -1,
+};
+
+fn fakeCapNetDial(network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 {
+    _ = network;
+    _ = network_len;
+    _ = address;
+    _ = address_len;
+    const st: *FakeCapNetState = @ptrCast(@alignCast(userdata.?));
+    out_handle.* = st.dial_handle;
+    return 0;
+}
+
+fn fakeCapNetRead(handle: i32, buf: [*]u8, max_bytes: i32, userdata: ?*anyopaque) callconv(.c) i32 {
+    const st: *FakeCapNetState = @ptrCast(@alignCast(userdata.?));
+    const idx: usize = @intCast(handle - 1);
+    const avail = st.buf_len[idx] - st.buf_pos[idx];
+    const n = @min(avail, @as(usize, @intCast(max_bytes)));
+    @memcpy(buf[0..n], st.buf[idx][st.buf_pos[idx]..][0..n]);
+    st.buf_pos[idx] += n;
+    return @intCast(n);
+}
+
+fn fakeCapNetWrite(handle: i32, data: [*]const u8, len: i32, userdata: ?*anyopaque) callconv(.c) i32 {
+    const st: *FakeCapNetState = @ptrCast(@alignCast(userdata.?));
+    const idx: usize = @intCast(handle - 1);
+    const n: usize = @intCast(len);
+    @memcpy(st.buf[idx][st.buf_len[idx]..][0..n], data[0..n]);
+    st.buf_len[idx] += n;
+    return @intCast(n);
+}
+
+fn fakeCapNetClose(handle: i32, userdata: ?*anyopaque) callconv(.c) void {
+    _ = handle;
+    const st: *FakeCapNetState = @ptrCast(@alignCast(userdata.?));
+    st.close_calls += 1;
+}
+
+fn fakeCapNetLocalAddr(handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void {
+    _ = handle;
+    _ = userdata;
+    const s = "10.0.0.1:1234";
+    const n = @min(s.len, @as(usize, @intCast(buf_len)) - 1);
+    @memcpy(buf[0..n], s[0..n]);
+    buf[n] = 0;
+}
+
+fn fakeCapNetRemoteAddr(handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void {
+    _ = handle;
+    _ = userdata;
+    const s = "203.0.113.9:443";
+    const n = @min(s.len, @as(usize, @intCast(buf_len)) - 1);
+    @memcpy(buf[0..n], s[0..n]);
+    buf[n] = 0;
+}
+
+fn fakeCapNetSetDeadline(handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void {
+    _ = handle;
+    const st: *FakeCapNetState = @ptrCast(@alignCast(userdata.?));
+    st.last_deadline_ms = ms;
+}
+
+fn fakeCapNetSetReadDeadline(handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void {
+    _ = handle;
+    const st: *FakeCapNetState = @ptrCast(@alignCast(userdata.?));
+    st.last_read_deadline_ms = ms;
+}
+
+fn fakeCapNetSetWriteDeadline(handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void {
+    _ = handle;
+    const st: *FakeCapNetState = @ptrCast(@alignCast(userdata.?));
+    st.last_write_deadline_ms = ms;
+}
+
+fn fakeCapNetListen(network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_listener_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 {
+    _ = network;
+    _ = network_len;
+    _ = address;
+    _ = address_len;
+    const st: *FakeCapNetState = @ptrCast(@alignCast(userdata.?));
+    out_listener_handle.* = st.listener_handle;
+    return 0;
+}
+
+fn fakeCapNetAccept(listener_handle: i32, out_conn_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 {
+    _ = listener_handle;
+    const st: *FakeCapNetState = @ptrCast(@alignCast(userdata.?));
+    if (st.accept_should_block) return 0;
+    out_conn_handle.* = st.accept_handle;
+    return 1;
+}
+
+fn fakeCapNetListenerClose(listener_handle: i32, userdata: ?*anyopaque) callconv(.c) void {
+    _ = listener_handle;
+    const st: *FakeCapNetState = @ptrCast(@alignCast(userdata.?));
+    st.listener_close_calls += 1;
+}
+
+fn fakeCapNetListenerLocalAddr(listener_handle: i32, buf: [*]u8, buf_len: i32, userdata: ?*anyopaque) callconv(.c) void {
+    _ = listener_handle;
+    _ = userdata;
+    const s = "0.0.0.0:9000";
+    const n = @min(s.len, @as(usize, @intCast(buf_len)) - 1);
+    @memcpy(buf[0..n], s[0..n]);
+    buf[n] = 0;
+}
+
+fn fakeCapNetSetAcceptDeadline(listener_handle: i32, ms: i64, userdata: ?*anyopaque) callconv(.c) void {
+    _ = listener_handle;
+    const st: *FakeCapNetState = @ptrCast(@alignCast(userdata.?));
+    st.last_accept_deadline_ms = ms;
+}
+
+const fake_cap_net_handlers: net_state.GengoNetHandlers = .{
+    .dial = fakeCapNetDial,
+    .read = fakeCapNetRead,
+    .write = fakeCapNetWrite,
+    .close = fakeCapNetClose,
+    .local_addr = fakeCapNetLocalAddr,
+    .remote_addr = fakeCapNetRemoteAddr,
+    .set_deadline = fakeCapNetSetDeadline,
+    .set_read_deadline = fakeCapNetSetReadDeadline,
+    .set_write_deadline = fakeCapNetSetWriteDeadline,
+    .listen = fakeCapNetListen,
+    .accept = fakeCapNetAccept,
+    .listener_close = fakeCapNetListenerClose,
+    .listener_local_addr = fakeCapNetListenerLocalAddr,
+    .set_accept_deadline = fakeCapNetSetAcceptDeadline,
+};
+
+// Covers dial/write/read/close, local_addr/remote_addr, set_deadline/
+// set_read_deadline/set_write_deadline, listen/accept/write/read/
+// listener_close, and dial_tls's host-callback-unsupported branch — all
+// through the fake handler set above, so no real socket is ever opened.
+// dial_tls: with handlers registered, net_state.netDialTls refuses before
+// ever attempting a handshake ("TLS is not supported with host net
+// callbacks"), which is itself a useful deterministic branch to exercise.
+test "cap:net dial/listen/accept/read/write/close and address/deadline ops through a fake host handler" {
+    net_state.clearPolicyRules();
+    _ = net_state.addPolicyRule(.allow, "*", 0);
+    defer net_state.clearPolicyRules();
+    net_state.clearListenPolicyRules();
+    _ = net_state.addListenPolicyRule(.allow, "*", 0);
+    defer net_state.clearListenPolicyRules();
+
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{ "net", "net.listen" },
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    switch (rt.run(
+        \\net := import("cap:net")
+        \\func doDial() string {
+        \\    conn := net.dial("tcp", "example.com:443")
+        \\    n := conn.write("hello")
+        \\    data := conn.read(5)
+        \\    conn.close()
+        \\    return data + ":" + string(n)
+        \\}
+        \\func doAddrs() string {
+        \\    conn := net.dial("tcp", "example.com:443")
+        \\    la := conn.local_addr()
+        \\    ra := conn.remote_addr()
+        \\    conn.close()
+        \\    return la + "|" + ra
+        \\}
+        \\func doDeadlines() bool {
+        \\    conn := net.dial("tcp", "example.com:443")
+        \\    conn.set_deadline(1000)
+        \\    conn.set_read_deadline(2000)
+        \\    conn.set_write_deadline(3000)
+        \\    conn.close()
+        \\    return true
+        \\}
+        \\func doDialTls() string {
+        \\    conn := net.dial_tls("tcp", "example.com:443")
+        \\    return string(conn)
+        \\}
+        \\func doListenAccept() string {
+        \\    l, err := net.listen("tcp", "0.0.0.0:9000")
+        \\    if err != null { return "listen-err" }
+        \\    l.set_accept_deadline(4000)
+        \\    conn, aerr := l.accept()
+        \\    if aerr != null { return "accept-err" }
+        \\    conn.write("world")
+        \\    data := conn.read(5)
+        \\    conn.close()
+        \\    l.close()
+        \\    return data
+        \\}
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+
+    // Registered after run(), not before — same re-pinning hazard documented
+    // on the cap:http fake handler test above.
+    var state = FakeCapNetState{};
+    net_state.setNetHandlers(fake_cap_net_handlers, @ptrCast(&state));
+    defer net_state.resetHandlers();
+
+    switch (rt.call("doDial", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("hello:5", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    try std.testing.expectEqual(@as(u32, 1), state.close_calls);
+
+    switch (rt.call("doAddrs", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("10.0.0.1:1234|203.0.113.9:443", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+
+    switch (rt.call("doDeadlines", &.{})) {
+        .ok => |v| try std.testing.expect(v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    try std.testing.expectEqual(@as(i64, 1000), state.last_deadline_ms);
+    try std.testing.expectEqual(@as(i64, 2000), state.last_read_deadline_ms);
+    try std.testing.expectEqual(@as(i64, 3000), state.last_write_deadline_ms);
+
+    switch (rt.call("doDialTls", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("dial_tls: TLS is not supported with host net callbacks", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+
+    switch (rt.call("doListenAccept", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("world", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    try std.testing.expectEqual(@as(u32, 1), state.listener_close_calls);
+}
+
+// Scenario 3: accept's would-block result (host handler returns 0, "no
+// connection yet") must surface as a catchable [null, err] pair rather than
+// blocking or crashing — net_state.netListenerAccept maps rc==0 to
+// error.DeadlineExceeded, which pushErrPairForNetError renders as "timeout".
+// Kept as its own test (separate fake state) so its accept_should_block=true
+// fixture can't interfere with the happy-path accept above.
+test "cap:net listener.accept surfaces a 'timeout' error when the host handler reports would-block" {
+    net_state.clearListenPolicyRules();
+    _ = net_state.addListenPolicyRule(.allow, "*", 0);
+    defer net_state.clearListenPolicyRules();
+
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{"net.listen"},
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    switch (rt.run(
+        \\net := import("cap:net")
+        \\func doAccept() string {
+        \\    l, err := net.listen("tcp", "0.0.0.0:9000")
+        \\    if err != null { return "listen-err" }
+        \\    conn, aerr := l.accept()
+        \\    if aerr != null { return string(aerr) }
+        \\    return "unexpected-ok"
+        \\}
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+
+    var state = FakeCapNetState{ .accept_should_block = true };
+    net_state.setNetHandlers(fake_cap_net_handlers, @ptrCast(&state));
+    defer net_state.resetHandlers();
+
+    switch (rt.call("doAccept", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("timeout", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+}
+
+// Scenario 4: dialing without the dial scope granted must raise a catchable
+// script-visible error naming the missing --cap flag, not a crash — the
+// scope-check short-circuit at the top of cap_net.zig's dialImpl, which
+// fires before net_state (and thus any handler/policy setup) is even
+// consulted. "net.listen" alone satisfies the bare "net" import gate
+// (module_compile.zig's isCapabilityEnabled treats any scoped grant as
+// satisfying its own module's bare-name gate) while granting listen but not
+// dial scope, so import("cap:net") still succeeds here.
+test "cap:net dial: dialing without the dial scope granted raises a catchable scope error" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{"net.listen"},
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    switch (rt.run(
+        \\net := import("cap:net")
+        \\func doDial() string {
+        \\    conn := net.dial("tcp", "example.com:443")
+        \\    return string(conn)
+        \\}
+        \\func doDialTls() string {
+        \\    conn := net.dial_tls("tcp", "example.com:443")
+        \\    return string(conn)
+        \\}
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+
+    switch (rt.call("doDial", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("net.dial: dial scope not granted (--cap net=dial)", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    switch (rt.call("doDialTls", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("net.dial_tls: dial scope not granted (--cap net=dial)", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+}
+
 // math.abs(minInt(i64)) used to panic: @abs on i64 returns a u64 magnitude
 // of 2^63, which doesn't fit back into i64 via @intCast. math.max/min used
 // to round-trip int operands through f64 to pick a result, which rounds a
@@ -7308,6 +7647,263 @@ test "compiler: std.json.stringify serializes bigint as digits, not null; std.co
     try std.testing.expectEqual(@as(f64, 123.0), as_float.float);
 }
 
+// ── std.fmt.format printf-style engine coverage (src/lang/native/io.zig) ──
+// std.fmt.format/std.fmt.stringify are NOT gated by allow_io (unlike
+// print/println/printf), so the whole format engine (parseSpec/fmtInt/
+// fmtFloat/fmtQuoted/fmtArg/fmtProcess/doSprintf) is reachable from plain
+// compiler_test.zig with no I/O capture setup. Expected outputs below were
+// derived by tracing io.zig's hand-rolled formatting functions directly
+// (a standalone `zig run` of copies of fmtF64Sci/fmtF64General/fmtF64Fixed),
+// not assumed from Go/C printf convention -- this is a from-scratch
+// reimplementation with its own rounding/cutover/escaping quirks.
+
+test "compiler: std.fmt.format integer verbs %d/%x/%X/%o/%b with sign and alt-form flags" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func decPos() string { return std.fmt.format("%d", 42) }
+        \\func decNeg() string { return std.fmt.format("%d", -42) }
+        \\func hexLower() string { return std.fmt.format("%x", 255) }
+        \\func hexUpper() string { return std.fmt.format("%X", 255) }
+        \\func hexNeg() string { return std.fmt.format("%x", -255) }
+        \\func oct() string { return std.fmt.format("%o", 8) }
+        \\func bin() string { return std.fmt.format("%b", 5) }
+        \\func altHex() string { return std.fmt.format("%#x", 255) }
+        \\func altHexUpper() string { return std.fmt.format("%#X", 255) }
+        \\func altOct() string { return std.fmt.format("%#o", 8) }
+        \\func altBin() string { return std.fmt.format("%#b", 5) }
+        \\func altZero() string { return std.fmt.format("%#x", 0) }
+        \\func plusSign() string { return std.fmt.format("%+d", 42) }
+        \\func spaceSign() string { return std.fmt.format("% d", 42) }
+        \\func plusSignOnNeg() string { return std.fmt.format("%+d", -42) }
+        \\func minInt(n int) string { return std.fmt.format("%d", n) }
+    );
+    try std.testing.expectEqualStrings("42", try vms.asStringValue(try rt.callGlobal("decPos", &.{})));
+    try std.testing.expectEqualStrings("-42", try vms.asStringValue(try rt.callGlobal("decNeg", &.{})));
+    try std.testing.expectEqualStrings("ff", try vms.asStringValue(try rt.callGlobal("hexLower", &.{})));
+    try std.testing.expectEqualStrings("FF", try vms.asStringValue(try rt.callGlobal("hexUpper", &.{})));
+    try std.testing.expectEqualStrings("-ff", try vms.asStringValue(try rt.callGlobal("hexNeg", &.{})));
+    try std.testing.expectEqualStrings("10", try vms.asStringValue(try rt.callGlobal("oct", &.{})));
+    try std.testing.expectEqualStrings("101", try vms.asStringValue(try rt.callGlobal("bin", &.{})));
+    try std.testing.expectEqualStrings("0xff", try vms.asStringValue(try rt.callGlobal("altHex", &.{})));
+    try std.testing.expectEqualStrings("0XFF", try vms.asStringValue(try rt.callGlobal("altHexUpper", &.{})));
+    try std.testing.expectEqualStrings("010", try vms.asStringValue(try rt.callGlobal("altOct", &.{})));
+    try std.testing.expectEqualStrings("0b101", try vms.asStringValue(try rt.callGlobal("altBin", &.{})));
+    // alt-form prefix is suppressed for a zero magnitude.
+    try std.testing.expectEqualStrings("0", try vms.asStringValue(try rt.callGlobal("altZero", &.{})));
+    try std.testing.expectEqualStrings("+42", try vms.asStringValue(try rt.callGlobal("plusSign", &.{})));
+    try std.testing.expectEqualStrings(" 42", try vms.asStringValue(try rt.callGlobal("spaceSign", &.{})));
+    // an actual negative sign always wins over +/space flags.
+    try std.testing.expectEqualStrings("-42", try vms.asStringValue(try rt.callGlobal("plusSignOnNeg", &.{})));
+    // i64::MIN's magnitude (2^63) overflows a naive negate -- fmtInt's
+    // std.math.minInt special case must avoid that trap. Passed in as a
+    // call argument (not a source literal): writing -9223372036854775808
+    // directly in Gengo source hits the unrelated, already-documented
+    // "unary negation of i64::MIN raises RangeError" literal-parsing trap.
+    try std.testing.expectEqualStrings("-9223372036854775808", try vms.asStringValue(try rt.callGlobal("minInt", &.{.{ .int = std.math.minInt(i64) }})));
+}
+
+test "compiler: std.fmt.format width/padding for integer verbs (right/left/zero-pad, signed zero-pad)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func rightPad() string { return std.fmt.format("%5d", 42) }
+        \\func leftPad() string { return std.fmt.format("%-5d", 42) }
+        \\func zeroPad() string { return std.fmt.format("%05d", 42) }
+        \\func zeroPadNeg() string { return std.fmt.format("%05d", -42) }
+    );
+    try std.testing.expectEqualStrings("   42", try vms.asStringValue(try rt.callGlobal("rightPad", &.{})));
+    try std.testing.expectEqualStrings("42   ", try vms.asStringValue(try rt.callGlobal("leftPad", &.{})));
+    try std.testing.expectEqualStrings("00042", try vms.asStringValue(try rt.callGlobal("zeroPad", &.{})));
+    // the sign stays in front of the zero-padding, not behind it.
+    try std.testing.expectEqualStrings("-0042", try vms.asStringValue(try rt.callGlobal("zeroPadNeg", &.{})));
+}
+
+test "compiler: std.fmt.format float verbs %f/%e/%E with default and explicit precision" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func fixedDefault() string { return std.fmt.format("%f", 1234.5) }
+        \\func fixedPrec2() string { return std.fmt.format("%.2f", 1234.5) }
+        \\func fixedPrec0Rounds() string { return std.fmt.format("%.0f", 3.7) }
+        \\func sciDefault() string { return std.fmt.format("%e", 1234.5) }
+        \\func sciUpper() string { return std.fmt.format("%E", 1234.5) }
+        \\func sciPrec2() string { return std.fmt.format("%.2e", 1234.5) }
+        \\func sciSmallExp() string { return std.fmt.format("%e", 0.0001234) }
+        \\func fixedPlusSign() string { return std.fmt.format("%+.1f", 3.5) }
+        \\func fixedSpaceSign() string { return std.fmt.format("% .1f", 3.5) }
+    );
+    try std.testing.expectEqualStrings("1234.500000", try vms.asStringValue(try rt.callGlobal("fixedDefault", &.{})));
+    try std.testing.expectEqualStrings("1234.50", try vms.asStringValue(try rt.callGlobal("fixedPrec2", &.{})));
+    try std.testing.expectEqualStrings("4", try vms.asStringValue(try rt.callGlobal("fixedPrec0Rounds", &.{})));
+    try std.testing.expectEqualStrings("1.234500e+03", try vms.asStringValue(try rt.callGlobal("sciDefault", &.{})));
+    try std.testing.expectEqualStrings("1.234500E+03", try vms.asStringValue(try rt.callGlobal("sciUpper", &.{})));
+    try std.testing.expectEqualStrings("1.23e+03", try vms.asStringValue(try rt.callGlobal("sciPrec2", &.{})));
+    try std.testing.expectEqualStrings("1.234000e-04", try vms.asStringValue(try rt.callGlobal("sciSmallExp", &.{})));
+    try std.testing.expectEqualStrings("+3.5", try vms.asStringValue(try rt.callGlobal("fixedPlusSign", &.{})));
+    try std.testing.expectEqualStrings(" 3.5", try vms.asStringValue(try rt.callGlobal("fixedSpaceSign", &.{})));
+}
+
+test "compiler: std.fmt.format %g/%G general float verb picks fixed vs scientific per exponent-vs-precision rule" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func fixedSide() string { return std.fmt.format("%g", 1234.5) }
+        \\func sciSideSmall() string { return std.fmt.format("%g", 0.00001234) }
+        \\func sciSideLarge() string { return std.fmt.format("%g", 123456789.0) }
+        \\func sciSideLargeUpper() string { return std.fmt.format("%G", 123456789.0) }
+        \\func trailingZerosStripped() string { return std.fmt.format("%g", 100.0) }
+        \\func zeroValue() string { return std.fmt.format("%g", 0.0) }
+    );
+    // exp=3 < default precision 6 -> fixed notation, trailing zeros stripped.
+    try std.testing.expectEqualStrings("1234.5", try vms.asStringValue(try rt.callGlobal("fixedSide", &.{})));
+    // exp=-5 < -4 -> scientific notation.
+    try std.testing.expectEqualStrings("1.234e-05", try vms.asStringValue(try rt.callGlobal("sciSideSmall", &.{})));
+    // exp=8 >= precision 6 -> scientific notation, rounded to 6 significant digits.
+    try std.testing.expectEqualStrings("1.23457e+08", try vms.asStringValue(try rt.callGlobal("sciSideLarge", &.{})));
+    try std.testing.expectEqualStrings("1.23457E+08", try vms.asStringValue(try rt.callGlobal("sciSideLargeUpper", &.{})));
+    try std.testing.expectEqualStrings("100", try vms.asStringValue(try rt.callGlobal("trailingZerosStripped", &.{})));
+    try std.testing.expectEqualStrings("0", try vms.asStringValue(try rt.callGlobal("zeroValue", &.{})));
+}
+
+test "compiler: std.fmt.format float verbs short-circuit on NaN/+Inf/-Inf regardless of verb" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func nanF() string { return std.fmt.format("%f", std.math.nan()) }
+        \\func nanE() string { return std.fmt.format("%e", std.math.nan()) }
+        \\func nanG() string { return std.fmt.format("%g", std.math.nan()) }
+        \\func infF() string { return std.fmt.format("%f", std.math.inf) }
+        \\func infE() string { return std.fmt.format("%e", std.math.inf) }
+        \\func negInfG() string { return std.fmt.format("%g", -std.math.inf) }
+    );
+    try std.testing.expectEqualStrings("NaN", try vms.asStringValue(try rt.callGlobal("nanF", &.{})));
+    try std.testing.expectEqualStrings("NaN", try vms.asStringValue(try rt.callGlobal("nanE", &.{})));
+    try std.testing.expectEqualStrings("NaN", try vms.asStringValue(try rt.callGlobal("nanG", &.{})));
+    try std.testing.expectEqualStrings("Inf", try vms.asStringValue(try rt.callGlobal("infF", &.{})));
+    try std.testing.expectEqualStrings("Inf", try vms.asStringValue(try rt.callGlobal("infE", &.{})));
+    try std.testing.expectEqualStrings("-Inf", try vms.asStringValue(try rt.callGlobal("negInfG", &.{})));
+}
+
+test "compiler: std.fmt.format %s precision truncates bytes, %t formats booleans, %c emits a rune" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func plainS() string { return std.fmt.format("%s", "hello") }
+        \\func precS() string { return std.fmt.format("%.3s", "hello") }
+        \\func precLongerThanStr() string { return std.fmt.format("%.10s", "hi") }
+        \\func boolTrue() string { return std.fmt.format("%t", true) }
+        \\func boolFalse() string { return std.fmt.format("%t", false) }
+        \\func runeVerb() string { return std.fmt.format("%c", 65) }
+    );
+    try std.testing.expectEqualStrings("hello", try vms.asStringValue(try rt.callGlobal("plainS", &.{})));
+    try std.testing.expectEqualStrings("hel", try vms.asStringValue(try rt.callGlobal("precS", &.{})));
+    try std.testing.expectEqualStrings("hi", try vms.asStringValue(try rt.callGlobal("precLongerThanStr", &.{})));
+    try std.testing.expectEqualStrings("true", try vms.asStringValue(try rt.callGlobal("boolTrue", &.{})));
+    try std.testing.expectEqualStrings("false", try vms.asStringValue(try rt.callGlobal("boolFalse", &.{})));
+    try std.testing.expectEqualStrings("A", try vms.asStringValue(try rt.callGlobal("runeVerb", &.{})));
+}
+
+test "compiler: std.fmt.format %q hand-rolled escaping for backslash/quote/newline/CR/tab/control-byte" {
+    var rt = try setup();
+    defer rt.deinit();
+    // Input (after Gengo's own lexer escape processing) is:
+    //   a \ b " c <LF> d <CR> e <TAB> f <0x01> g
+    // fmtQuoted re-escapes: '\\'->\\\\, '"'->\", '\n'->\n, '\r'->\r, '\t'->\t,
+    // and control bytes 0-8/11/12/14-31/127 -> \xHH.
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func q() string { return std.fmt.format("%q", "a\\b\"c\nd\re\tf\x01g") }
+    );
+    const result = try rt.callGlobal("q", &.{});
+    try std.testing.expectEqualStrings("\"a\\\\b\\\"c\\nd\\re\\tf\\x01g\"", try vms.asStringValue(result));
+}
+
+test "compiler: std.fmt.format %v generic verb honors width/left-align like the other verbs" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func plainInt() string { return std.fmt.format("%v", 42) }
+        \\func plainStr() string { return std.fmt.format("%v", "hi") }
+        \\func plainBool() string { return std.fmt.format("%v", true) }
+        \\func widthPair() string { return std.fmt.format("[%5v][%-5v]", 42, 42) }
+    );
+    try std.testing.expectEqualStrings("42", try vms.asStringValue(try rt.callGlobal("plainInt", &.{})));
+    try std.testing.expectEqualStrings("hi", try vms.asStringValue(try rt.callGlobal("plainStr", &.{})));
+    try std.testing.expectEqualStrings("true", try vms.asStringValue(try rt.callGlobal("plainBool", &.{})));
+    try std.testing.expectEqualStrings("[   42][42   ]", try vms.asStringValue(try rt.callGlobal("widthPair", &.{})));
+}
+
+test "compiler: std.fmt.format %% literal percent and multi-arg positional consumption" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func literalPercent() string { return std.fmt.format("100%%") }
+        \\func interleaved() string { return std.fmt.format("Name: %s, Age: %d, Score: %.1f%%", "Bob", 30, 99.5) }
+    );
+    try std.testing.expectEqualStrings("100%", try vms.asStringValue(try rt.callGlobal("literalPercent", &.{})));
+    try std.testing.expectEqualStrings("Name: Bob, Age: 30, Score: 99.5%", try vms.asStringValue(try rt.callGlobal("interleaved", &.{})));
+}
+
+test "compiler: std.fmt.format raises ArityMismatch on verb/arg count mismatch, TypeError on an unrecognized verb" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func tooFewArgs() string { return std.fmt.format("%d %d", 5) }
+        \\func tooManyArgs() string { return std.fmt.format("%d", 5, 6) }
+        \\func unknownVerb() string { return std.fmt.format("%z", 5) }
+    );
+    try std.testing.expectError(error.ArityMismatch, rt.callGlobal("tooFewArgs", &.{}));
+    try std.testing.expectError(error.ArityMismatch, rt.callGlobal("tooManyArgs", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("unknownVerb", &.{}));
+}
+
+// std.fmt.stringify (fmt_stringify) drives the same sprintValue/
+// sprintValueDepth object-stringification engine used by print/println/%v,
+// exercising branches (struct_instance, array, map, named_error_value,
+// variant_value with a record arm/single-payload arm/no-payload arm) that
+// had no coverage anywhere else in this file -- every existing `string(x)`
+// call in this file goes through the *unrelated* cast_string/
+// nativeConvToString path (src/lang/native/core.zig) instead, which formats
+// named errors as their bare message ("boom") rather than "MyErr(boom)".
+test "compiler: std.fmt.stringify formats struct/array/map/named-error/variant objects" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Point struct { x int, y int }
+        \\type MyErr error
+        \\type Shape variant {
+        \\    circle { radius float },
+        \\    tag(label string),
+        \\    point,
+        \\}
+        \\func structStr() string { return std.fmt.stringify(Point{x: 1, y: 2}) }
+        \\func arrayStr() string { return std.fmt.stringify([1, 2, 3]) }
+        \\func mapStr() string { return std.fmt.stringify({ "alpha": 1 }) }
+        \\func namedErrStr() string { return std.fmt.stringify(MyErr("boom")) }
+        \\func variantRecordStr() string { return std.fmt.stringify(Shape.circle { radius: 5.0 }) }
+        \\func variantPayloadStr() string { return std.fmt.stringify(Shape.tag("hi")) }
+        \\func variantNoPayloadStr() string { return std.fmt.stringify(Shape.point) }
+    );
+    try std.testing.expectEqualStrings("<struct Point>", try vms.asStringValue(try rt.callGlobal("structStr", &.{})));
+    try std.testing.expectEqualStrings("[1, 2, 3]", try vms.asStringValue(try rt.callGlobal("arrayStr", &.{})));
+    try std.testing.expectEqualStrings("{alpha: 1}", try vms.asStringValue(try rt.callGlobal("mapStr", &.{})));
+    try std.testing.expectEqualStrings("MyErr(boom)", try vms.asStringValue(try rt.callGlobal("namedErrStr", &.{})));
+    try std.testing.expectEqualStrings("Shape.circle(5)", try vms.asStringValue(try rt.callGlobal("variantRecordStr", &.{})));
+    try std.testing.expectEqualStrings("Shape.tag(hi)", try vms.asStringValue(try rt.callGlobal("variantPayloadStr", &.{})));
+    try std.testing.expectEqualStrings("Shape.point", try vms.asStringValue(try rt.callGlobal("variantNoPayloadStr", &.{})));
+}
+
 // A predicate-bearing named array/map element type was only checked at
 // initial construction (validateNamedCollectionElements); every mutation
 // path after that (arr[i]=v, m[k]=v, core.append) reused a shallow
@@ -7650,4 +8246,177 @@ test "compiler: std.fmt.format raises no crash on an absurdly long width/precisi
     _ = rt.callGlobal("widthOverflow", &.{}) catch {};
     const normal = try rt.callGlobal("normal", &.{});
     try std.testing.expectEqualStrings("   42", try vms.asStringValue(normal));
+}
+
+// ── std.array.* dispatch coverage (src/lang/native/array.zig) ──────────────
+
+test "compiler: std.array.filter selects matching elements, including empty-input and no-match cases" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\even := func(v int) { return v rem 2 == 0 }
+        \\assert std.core.deep_equal(std.array.filter([1, 2, 3, 4, 5, 6], even), [2, 4, 6])
+        \\assert std.core.deep_equal(std.array.filter([1, 3, 5], even), [])
+        \\assert std.core.deep_equal(std.array.filter([], even), [])
+    );
+}
+
+test "compiler: std.array.map transforms every element, including an empty array" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\double := func(v int) { return v * 2 }
+        \\assert std.core.deep_equal(std.array.map([1, 2, 3], double), [2, 4, 6])
+        \\assert std.core.deep_equal(std.array.map([], double), [])
+    );
+}
+
+test "compiler: std.array.reduce folds left-to-right and returns init unchanged for an empty array" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\sum := func(acc int, v int) { return acc + v }
+        \\assert std.array.reduce([1, 2, 3, 4, 5], sum, 0) == 15
+        \\assert std.array.reduce([], sum, 42) == 42
+        \\concat := func(acc string, v string) { return acc + v }
+        \\assert std.array.reduce(["a", "b", "c"], concat, "") == "abc"
+    );
+}
+
+test "compiler: std.array.slice returns the requested sub-array and raises IndexOutOfBounds on invalid ranges" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\assert std.core.deep_equal(std.array.slice([1, 2, 3, 4, 5], 1, 4), [2, 3, 4])
+        \\assert std.core.deep_equal(std.array.slice([1, 2, 3], 0, 3), [1, 2, 3])
+        \\assert std.core.deep_equal(std.array.slice([1, 2, 3], 0, 0), [])
+        \\func negFrom() any { return std.array.slice([1, 2, 3], -1, 2) }
+        \\func toGreaterLen() any { return std.array.slice([1, 2, 3], 0, 5) }
+        \\func fromGreaterTo() any { return std.array.slice([1, 2, 3], 2, 1) }
+    );
+    try std.testing.expectError(error.IndexOutOfBounds, rt.callGlobal("negFrom", &.{}));
+    try std.testing.expectError(error.IndexOutOfBounds, rt.callGlobal("toGreaterLen", &.{}));
+    try std.testing.expectError(error.IndexOutOfBounds, rt.callGlobal("fromGreaterTo", &.{}));
+}
+
+test "compiler: std.array.zip pairs elements up to the shorter array's length" {
+    var rt = try setup();
+    defer rt.deinit();
+    // Each pair is [int, string] — a heterogeneous array that can't be
+    // spelled as a literal (bare array literals are runtime-homogeneous;
+    // see build_array's element-type check in vm.zig), so pairs are
+    // checked element-by-element via indexing instead of deep_equal
+    // against a literal.
+    try rt.run(
+        \\std := import("std")
+        \\z := std.array.zip([1, 2, 3], ["a", "b", "c"])
+        \\assert std.core.len(z) == 3
+        \\assert z[0][0] == 1 and z[0][1] == "a"
+        \\assert z[1][0] == 2 and z[1][1] == "b"
+        \\assert z[2][0] == 3 and z[2][1] == "c"
+        \\z2 := std.array.zip([1, 2], ["x"])
+        \\assert std.core.len(z2) == 1
+        \\assert z2[0][0] == 1 and z2[0][1] == "x"
+        \\z3 := std.array.zip([], [1, 2, 3])
+        \\assert std.core.len(z3) == 0
+    );
+}
+
+test "compiler: std.array.flat flattens exactly one level, leaving scalars and deeper nesting alone" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\assert std.core.deep_equal(std.array.flat([[1, 2], [3, 4], [5]]), [1, 2, 3, 4, 5])
+        \\assert std.core.deep_equal(std.array.flat([[], [1], [2, 3]]), [1, 2, 3])
+        \\assert std.core.deep_equal(std.array.flat([]), [])
+        \\// Non-array elements pass through untouched, and only one level unwraps.
+        \\// A bare array literal is runtime-homogeneous (build_array in vm.zig
+        \\// rejects mixed element types), so the heterogeneous `mixed` input
+        \\// below is assembled via std.core.append instead of a mixed-type
+        \\// literal, and checked element-by-element rather than via
+        \\// std.core.deep_equal against a hand-built "expected" array: an
+        \\// append-built array is the .array_capacity Object variant, while
+        \\// std.array.flat's own output is .array_managed, and deep_equal's
+        \\// cross-variant exemption (core.zig's deepEqualObject) only covers
+        \\// .array/.array_managed pairs, not .array_capacity — so comparing
+        \\// the two forms wrongly reports "not equal" on identical content.
+        \\inner := [2, 3]
+        \\one_two_three := []
+        \\one_two_three = std.core.append(one_two_three, 1)
+        \\one_two_three = std.core.append(one_two_three, inner)
+        \\mixed := []
+        \\mixed = std.core.append(mixed, one_two_three)
+        \\mixed = std.core.append(mixed, 4)
+        \\mixed = std.core.append(mixed, [5])
+        \\flat_mixed := std.array.flat(mixed)
+        \\assert std.core.len(flat_mixed) == 4
+        \\assert flat_mixed[0] == 1
+        \\assert std.core.deep_equal(flat_mixed[1], inner)
+        \\assert flat_mixed[2] == 4
+        \\assert flat_mixed[3] == 5
+    );
+}
+
+test "compiler: std.array.find and find_index return null/-1 when no element matches" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\isNeg := func(v int) { return v < 0 }
+        \\assert std.array.find([1, 2, -3, 4], isNeg) == -3
+        \\assert std.array.find([1, 2, 3], isNeg) == null
+        \\assert std.array.find([], isNeg) == null
+        \\assert std.array.find_index([1, 2, -3, 4], isNeg) == 2
+        \\assert std.array.find_index([1, 2, 3], isNeg) == -1
+        \\assert std.array.find_index([], isNeg) == -1
+    );
+}
+
+test "compiler: std.array.all and any handle mixed predicates and the empty-array edge case" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\pos := func(v int) { return v > 0 }
+        \\assert std.array.all([1, 2, 3], pos) == true
+        \\assert std.array.all([1, -2, 3], pos) == false
+        \\assert std.array.all([], pos) == true
+        \\assert std.array.any([-1, -2, 3], pos) == true
+        \\assert std.array.any([-1, -2, -3], pos) == false
+        \\assert std.array.any([], pos) == false
+    );
+}
+
+test "compiler: std.array.chunk splits into even and uneven groups and rejects size <= 0" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\assert std.core.deep_equal(std.array.chunk([1, 2, 3, 4, 5, 6], 2), [[1, 2], [3, 4], [5, 6]])
+        \\assert std.core.deep_equal(std.array.chunk([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]])
+        \\assert std.core.deep_equal(std.array.chunk([], 3), [])
+        \\func chunkZero() any { return std.array.chunk([1, 2, 3], 0) }
+        \\func chunkNeg() any { return std.array.chunk([1, 2, 3], -1) }
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("chunkZero", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("chunkNeg", &.{}));
+}
+
+test "compiler: std.array.filter/map raise TypeError for a non-array argument or a non-bool predicate result" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func filterNonArray() any { return std.array.filter(5, func(v int) bool { return true }) }
+        \\func filterBadPredicate() any { return std.array.filter([1, 2, 3], func(v int) int { return v }) }
+        \\func mapNonArray() any { return std.array.map("nope", func(v int) { return v }) }
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("filterNonArray", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("filterBadPredicate", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("mapNonArray", &.{}));
 }

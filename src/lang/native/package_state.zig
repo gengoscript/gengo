@@ -297,3 +297,308 @@ test "checkedAdd rejects usize overflow instead of wrapping" {
     try std.testing.expectEqual(@as(usize, 5), try checkedAdd(2, 3));
     try std.testing.expectEqual(@as(usize, 0), try checkedAdd(0, 0));
 }
+
+// ── loadFromZip test helpers ────────────────────────────────────────────────
+//
+// std.zip (Zig 0.16) exposes only reading/central-directory-parsing structs,
+// no writer API, so these hand-roll the byte layout loadFromZip expects:
+// one std.zip.LocalFileHeader (30 bytes) + name + data per entry, followed
+// by one std.zip.CentralDirectoryFileHeader (46 bytes) + name per entry,
+// followed by a std.zip.EndRecord (22 bytes). All entries use the `store`
+// compression method (compression_method = 0) so no deflate encoder is
+// needed; loadFromZip doesn't verify crc32, so it's left as 0 throughout.
+
+const TestZipEntry = struct {
+    name: []const u8,
+    data: []const u8 = "",
+};
+
+fn buildZipStore(allocator: std.mem.Allocator, entries: []const TestZipEntry) ![]u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(allocator);
+
+    const local_offsets = try allocator.alloc(u32, entries.len);
+    defer allocator.free(local_offsets);
+
+    for (entries, 0..) |e, i| {
+        local_offsets[i] = @intCast(buf.items.len);
+
+        var lfh: [30]u8 = undefined;
+        @memcpy(lfh[0..4], &std.zip.local_file_header_sig);
+        std.mem.writeInt(u16, lfh[4..6], 20, .little); // version_needed_to_extract
+        std.mem.writeInt(u16, lfh[6..8], 0, .little); // flags
+        std.mem.writeInt(u16, lfh[8..10], 0, .little); // compression_method = store
+        std.mem.writeInt(u16, lfh[10..12], 0, .little); // last_modification_time
+        std.mem.writeInt(u16, lfh[12..14], 0, .little); // last_modification_date
+        std.mem.writeInt(u32, lfh[14..18], 0, .little); // crc32
+        std.mem.writeInt(u32, lfh[18..22], @intCast(e.data.len), .little); // compressed_size
+        std.mem.writeInt(u32, lfh[22..26], @intCast(e.data.len), .little); // uncompressed_size
+        std.mem.writeInt(u16, lfh[26..28], @intCast(e.name.len), .little); // filename_len
+        std.mem.writeInt(u16, lfh[28..30], 0, .little); // extra_len
+        try buf.appendSlice(allocator, &lfh);
+        try buf.appendSlice(allocator, e.name);
+        try buf.appendSlice(allocator, e.data);
+    }
+
+    const cd_start: u32 = @intCast(buf.items.len);
+    for (entries, 0..) |e, i| {
+        var cdh: [46]u8 = undefined;
+        @memcpy(cdh[0..4], &std.zip.central_file_header_sig);
+        std.mem.writeInt(u16, cdh[4..6], 20, .little); // version_made_by
+        std.mem.writeInt(u16, cdh[6..8], 20, .little); // version_needed_to_extract
+        std.mem.writeInt(u16, cdh[8..10], 0, .little); // flags
+        std.mem.writeInt(u16, cdh[10..12], 0, .little); // compression_method = store
+        std.mem.writeInt(u16, cdh[12..14], 0, .little); // last_modification_time
+        std.mem.writeInt(u16, cdh[14..16], 0, .little); // last_modification_date
+        std.mem.writeInt(u32, cdh[16..20], 0, .little); // crc32
+        std.mem.writeInt(u32, cdh[20..24], @intCast(e.data.len), .little); // compressed_size
+        std.mem.writeInt(u32, cdh[24..28], @intCast(e.data.len), .little); // uncompressed_size
+        std.mem.writeInt(u16, cdh[28..30], @intCast(e.name.len), .little); // filename_len
+        std.mem.writeInt(u16, cdh[30..32], 0, .little); // extra_len
+        std.mem.writeInt(u16, cdh[32..34], 0, .little); // comment_len
+        std.mem.writeInt(u16, cdh[34..36], 0, .little); // disk_number
+        std.mem.writeInt(u16, cdh[36..38], 0, .little); // internal_file_attributes
+        std.mem.writeInt(u32, cdh[38..42], 0, .little); // external_file_attributes
+        std.mem.writeInt(u32, cdh[42..46], local_offsets[i], .little); // local_file_header_offset
+        try buf.appendSlice(allocator, &cdh);
+        try buf.appendSlice(allocator, e.name);
+    }
+    const cd_size: u32 = @intCast(buf.items.len - cd_start);
+
+    var eocd: [22]u8 = undefined;
+    @memcpy(eocd[0..4], &std.zip.end_record_sig);
+    std.mem.writeInt(u16, eocd[4..6], 0, .little); // disk_number
+    std.mem.writeInt(u16, eocd[6..8], 0, .little); // central_directory_disk_number
+    std.mem.writeInt(u16, eocd[8..10], @intCast(entries.len), .little); // record_count_disk
+    std.mem.writeInt(u16, eocd[10..12], @intCast(entries.len), .little); // record_count_total
+    std.mem.writeInt(u32, eocd[12..16], cd_size, .little); // central_directory_size
+    std.mem.writeInt(u32, eocd[16..20], cd_start, .little); // central_directory_offset
+    std.mem.writeInt(u16, eocd[20..22], 0, .little); // comment_len
+    try buf.appendSlice(allocator, &eocd);
+
+    return try buf.toOwnedSlice(allocator);
+}
+
+test "loadFromZip: happy path extracts .gengo files with store compression" {
+    const allocator = std.testing.allocator;
+    const src_a = "pub func a() int { return 1 }";
+    const src_b = "pub func b() int { return 2 }";
+    const zip_bytes = try buildZipStore(allocator, &.{
+        .{ .name = "a.gengo", .data = src_a },
+        .{ .name = "b.gengo", .data = src_b },
+    });
+    defer allocator.free(zip_bytes);
+
+    var reg = PackageRegistry{};
+    defer clearRegistry(&reg);
+
+    try loadFromZip(&reg, "mypkg", zip_bytes);
+
+    const found_a = resolve(&reg, "mypkg/a");
+    try std.testing.expect(found_a != null);
+    try std.testing.expectEqualStrings(src_a, found_a.?);
+
+    const found_b = resolve(&reg, "mypkg/b");
+    try std.testing.expect(found_b != null);
+    try std.testing.expectEqualStrings(src_b, found_b.?);
+}
+
+test "loadFromZip: skips non-.gengo files and directory entries" {
+    const allocator = std.testing.allocator;
+    const src = "pub func c() int { return 3 }";
+    const zip_bytes = try buildZipStore(allocator, &.{
+        .{ .name = "readme.txt", .data = "not gengo source" },
+        .{ .name = "dir/", .data = "" },
+        .{ .name = "c.gengo", .data = src },
+    });
+    defer allocator.free(zip_bytes);
+
+    var reg = PackageRegistry{};
+    defer clearRegistry(&reg);
+
+    try loadFromZip(&reg, "mypkg", zip_bytes);
+
+    try std.testing.expect(resolve(&reg, "mypkg/readme") == null);
+    try std.testing.expect(resolve(&reg, "mypkg/readme.txt") == null);
+    try std.testing.expect(resolve(&reg, "mypkg/dir") == null);
+    const found = resolve(&reg, "mypkg/c");
+    try std.testing.expect(found != null);
+    try std.testing.expectEqualStrings(src, found.?);
+}
+
+test "loadFromZip: skips filenames containing path traversal" {
+    const allocator = std.testing.allocator;
+    const zip_bytes = try buildZipStore(allocator, &.{
+        .{ .name = "../evil.gengo", .data = "pub func evil() int { return 666 }" },
+    });
+    defer allocator.free(zip_bytes);
+
+    var reg = PackageRegistry{};
+    defer clearRegistry(&reg);
+
+    try loadFromZip(&reg, "mypkg", zip_bytes);
+
+    try std.testing.expect(resolve(&reg, "mypkg/evil") == null);
+    try std.testing.expect(resolve(&reg, "mypkg/../evil") == null);
+}
+
+test "loadFromZip: FileTooLarge when declared uncompressed_size exceeds MaxFileSize" {
+    const allocator = std.testing.allocator;
+    const name = "big.gengo";
+    const data = "tiny";
+    const zip_bytes = try buildZipStore(allocator, &.{
+        .{ .name = name, .data = data },
+    });
+    defer allocator.free(zip_bytes);
+
+    // Patch the central directory entry's uncompressed_size field (offset
+    // +24 within CentralDirectoryFileHeader, right after the local file
+    // header + name + data) to exceed MaxFileSize. loadFromZip's
+    // FileTooLarge check fires before the local header or compressed data
+    // are ever touched, so the (now-mismatched) local header can stay as-is.
+    const local_size: u32 = 30 + @as(u32, @intCast(name.len)) + @as(u32, @intCast(data.len));
+    const huge: u32 = @intCast(MaxFileSize + 1);
+    std.mem.writeInt(u32, zip_bytes[local_size + 24 ..][0..4], huge, .little);
+
+    var reg = PackageRegistry{};
+    defer clearRegistry(&reg);
+
+    try std.testing.expectError(error.FileTooLarge, loadFromZip(&reg, "mypkg", zip_bytes));
+}
+
+test "loadFromZip: InvalidZip when no end-of-central-directory record is found" {
+    var reg = PackageRegistry{};
+    defer clearRegistry(&reg);
+    try std.testing.expectError(error.InvalidZip, loadFromZip(&reg, "mypkg", "not a zip file at all"));
+}
+
+test "loadFromZip: InvalidZip when end record's cd_offset/cd_size overflow the buffer" {
+    const allocator = std.testing.allocator;
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+
+    const padding = [_]u8{0} ** 20;
+    try buf.appendSlice(allocator, &padding);
+
+    var eocd: [22]u8 = undefined;
+    @memcpy(eocd[0..4], &std.zip.end_record_sig);
+    std.mem.writeInt(u16, eocd[4..6], 0, .little);
+    std.mem.writeInt(u16, eocd[6..8], 0, .little);
+    std.mem.writeInt(u16, eocd[8..10], 1, .little);
+    std.mem.writeInt(u16, eocd[10..12], 1, .little);
+    std.mem.writeInt(u32, eocd[12..16], 0x1000, .little); // cd_size
+    std.mem.writeInt(u32, eocd[16..20], 0xFFFFFF00, .little); // cd_offset: nowhere near the buffer
+    std.mem.writeInt(u16, eocd[20..22], 0, .little);
+    try buf.appendSlice(allocator, &eocd);
+
+    var reg = PackageRegistry{};
+    defer clearRegistry(&reg);
+    try std.testing.expectError(error.InvalidZip, loadFromZip(&reg, "mypkg", buf.items));
+}
+
+test "loadFromZip: PackageTableFull after MaxPackages successful loads" {
+    const allocator = std.testing.allocator;
+    const zip_bytes = try buildZipStore(allocator, &.{
+        .{ .name = "m.gengo", .data = "pub func m() int { return 0 }" },
+    });
+    defer allocator.free(zip_bytes);
+
+    var reg = PackageRegistry{};
+    defer clearRegistry(&reg);
+
+    var i: usize = 0;
+    while (i < MaxPackages) : (i += 1) {
+        var namebuf: [16]u8 = undefined;
+        const name = try std.fmt.bufPrint(&namebuf, "pkg{d}", .{i});
+        try loadFromZip(&reg, name, zip_bytes);
+    }
+    try std.testing.expectEqual(@as(u8, MaxPackages), reg.count);
+
+    try std.testing.expectError(error.PackageTableFull, loadFromZip(&reg, "one_too_many", zip_bytes));
+}
+
+test "loadFromZip: FileTableFull after MaxFilesPerPackage files in one package" {
+    const allocator = std.testing.allocator;
+    var entries: [MaxFilesPerPackage + 1]TestZipEntry = undefined;
+    var namebufs: [MaxFilesPerPackage + 1][16]u8 = undefined;
+    for (0..entries.len) |i| {
+        const nm = try std.fmt.bufPrint(&namebufs[i], "f{d}.gengo", .{i});
+        entries[i] = .{ .name = nm, .data = "pub func f() int { return 0 }" };
+    }
+    const zip_bytes = try buildZipStore(allocator, &entries);
+    defer allocator.free(zip_bytes);
+
+    var reg = PackageRegistry{};
+    defer clearRegistry(&reg);
+
+    try std.testing.expectError(error.FileTableFull, loadFromZip(&reg, "manyfiles", zip_bytes));
+}
+
+test "loadFromDir: happy path walks nested directories for .gengo files" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(tmp_path);
+
+    const src_top = "pub func top() int { return 1 }";
+    const src_inner = "pub func inner() int { return 2 }";
+
+    try tmp.dir.writeFile(io, .{ .sub_path = "top.gengo", .data = src_top });
+    try tmp.dir.createDirPath(io, "sub");
+    try tmp.dir.writeFile(io, .{ .sub_path = "sub/inner.gengo", .data = src_inner });
+
+    var reg = PackageRegistry{};
+    defer clearRegistry(&reg);
+
+    try loadFromDir(&reg, "dirpkg", tmp_path);
+
+    const found_top = resolve(&reg, "dirpkg/top");
+    try std.testing.expect(found_top != null);
+    try std.testing.expectEqualStrings(src_top, found_top.?);
+
+    const found_inner = resolve(&reg, "dirpkg/sub/inner");
+    try std.testing.expect(found_inner != null);
+    try std.testing.expectEqualStrings(src_inner, found_inner.?);
+}
+
+test "loadFromDir: ignores non-.gengo files" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(tmp_path);
+
+    try tmp.dir.writeFile(io, .{ .sub_path = "notes.txt", .data = "just text" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "real.gengo", .data = "pub func real() int { return 5 }" });
+
+    var reg = PackageRegistry{};
+    defer clearRegistry(&reg);
+
+    try loadFromDir(&reg, "dirpkg2", tmp_path);
+
+    try std.testing.expect(resolve(&reg, "dirpkg2/notes") == null);
+    try std.testing.expect(resolve(&reg, "dirpkg2/notes.txt") == null);
+    const found = resolve(&reg, "dirpkg2/real");
+    try std.testing.expect(found != null);
+}
+
+test "loadFromDir: FileTableFull when more than MaxFilesPerPackage .gengo files exist" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(tmp_path);
+
+    var i: usize = 0;
+    while (i < MaxFilesPerPackage + 1) : (i += 1) {
+        var namebuf: [24]u8 = undefined;
+        const nm = try std.fmt.bufPrint(&namebuf, "f{d}.gengo", .{i});
+        try tmp.dir.writeFile(io, .{ .sub_path = nm, .data = "pub func f() int { return 0 }" });
+    }
+
+    var reg = PackageRegistry{};
+    defer clearRegistry(&reg);
+
+    try std.testing.expectError(error.FileTableFull, loadFromDir(&reg, "toomany", tmp_path));
+}
