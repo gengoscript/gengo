@@ -7983,6 +7983,202 @@ test "compiler: map insert keeps a freshly built value alive across a growth all
     }
 }
 
+// mapSet converts a map's small linear-scan representation to map_hashed
+// once an insert pushes the entry count past 8 (see mapSet's `if (new_len >
+// 8)` branch in vm_map.zig) — ordinary small-map Gengo scripts (a handful
+// of key/value pairs, the overwhelming majority of real usage) never cross
+// that threshold, so mapFindHashedIndex/mapBuildHashedBuckets/
+// mapInsertHashed's happy path, not-found path, in-place-update path, and
+// hashed mapDelete were all effectively untested. 300 entries forces
+// several bucket-table growths along the way (mapInsertHashed grows once
+// load factor would exceed 70%), and sequential int keys collide directly
+// once the bucket mask wraps (mapHashValue(.int) is a bare bitcast, not
+// mixed), so this also exercises mapFindHashedIndex/mapBuildHashedBuckets's
+// collision-probing loop without needing to hand-pick colliding keys.
+test "compiler: hashed map (>8 entries) covers volume round-trip, not-found, overwrite, and delete for int and string keys" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func intMapRoundTrip() bool {
+        \\    m := {}
+        \\    for i := 0; i < 300; i += 1 {
+        \\        m[i] = i * i
+        \\    }
+        \\    ok := std.core.len(m) == 300
+        \\    for i := 0; i < 300; i += 1 {
+        \\        if m[i] != i * i { ok = false }
+        \\    }
+        \\    return ok
+        \\}
+        \\func intMapNotFound() bool {
+        \\    m := {}
+        \\    for i := 0; i < 300; i += 1 {
+        \\        m[i] = i
+        \\    }
+        \\    return not std.core.has(m, 9999) and std.core.is_null(m[9999])
+        \\}
+        \\func intMapOverwriteInPlace() bool {
+        \\    m := {}
+        \\    for i := 0; i < 300; i += 1 {
+        \\        m[i] = i
+        \\    }
+        \\    m[5] = -1
+        \\    return std.core.len(m) == 300 and m[5] == -1
+        \\}
+        \\func intMapDeleteKeepsNeighbors() bool {
+        \\    m := {}
+        \\    for i := 0; i < 300; i += 1 {
+        \\        m[i] = i * i
+        \\    }
+        \\    removed := std.core.delete(m, 10)
+        \\    stillMissing := std.core.delete(m, 99999)
+        \\    return removed == 100 and std.core.is_null(stillMissing) and std.core.len(m) == 299 and not std.core.has(m, 10) and m[9] == 81 and m[11] == 121
+        \\}
+        \\func stringMapRoundTrip() bool {
+        \\    sm := {}
+        \\    for i := 0; i < 300; i += 1 {
+        \\        key := "k" + std.conv.to_string(i)
+        \\        sm[key] = i
+        \\    }
+        \\    ok := std.core.len(sm) == 300
+        \\    for i := 0; i < 300; i += 1 {
+        \\        key := "k" + std.conv.to_string(i)
+        \\        if sm[key] != i { ok = false }
+        \\    }
+        \\    return ok
+        \\}
+        \\func stringMapNotFoundOverwriteDelete() bool {
+        \\    sm := {}
+        \\    for i := 0; i < 300; i += 1 {
+        \\        key := "k" + std.conv.to_string(i)
+        \\        sm[key] = i
+        \\    }
+        \\    notFound := not std.core.has(sm, "missing") and std.core.is_null(sm["missing"])
+        \\    sm["k5"] = -1
+        \\    overwrote := std.core.len(sm) == 300 and sm["k5"] == -1
+        \\    removed := std.core.delete(sm, "k10")
+        \\    deleted := removed == 10 and std.core.len(sm) == 299 and not std.core.has(sm, "k10") and sm["k9"] == 9 and sm["k11"] == 11
+        \\    return notFound and overwrote and deleted
+        \\}
+        \\func staticAndDynamicStringKeysCollide() bool {
+        \\    // A static string literal key and a heap-built dyn_string key with
+        \\    // the same content must hash and compare equal (mapHashValue hashes
+        \\    // dyn_string by content, not pointer identity).
+        \\    m := {"hello": 1}
+        \\    for i := 0; i < 20; i += 1 {
+        \\        m[std.conv.to_string(i)] = i
+        \\    }
+        \\    dynHello := "he" + "llo"
+        \\    return m[dynHello] == 1
+        \\}
+    );
+    try std.testing.expect((try rt.callGlobal("intMapRoundTrip", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("intMapNotFound", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("intMapOverwriteInPlace", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("intMapDeleteKeepsNeighbors", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("stringMapRoundTrip", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("stringMapNotFoundOverwriteDelete", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("staticAndDynamicStringKeysCollide", &.{})).boolean);
+}
+
+// mapHashValue has a distinct branch per Value key kind (int/float/decimal/
+// rune/boolean/string/error_value, plus dyn_string/string_view/enum_value/
+// named_value/variant_value/inline_variant inside its .object arm), but
+// mapHashValue is only ever called from the hashed-map code paths
+// (mapFindHashedIndex/mapBuildHashedBuckets/mapInsertHashed) — mapFindLinear
+// never calls it. So every branch beyond plain int/string is unreachable
+// from an ordinary small (<=8 entry) map. This builds one hashed map (past
+// the 8-entry threshold from the int keys alone) keyed by one value of
+// every reachable kind and round-trips each — including a decimal-based
+// named type (named_value), a unit variant arm (inline_variant, since a
+// null payload fits inline), a payload variant arm (variant_value, since a
+// string payload does not fit inline), and a std.bytes.slice result
+// (string_view).
+test "compiler: hashed map with a distinct key of every Value kind exercises every mapHashValue branch" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Color enum { red, green, blue, yellow, purple, orange, cyan, magenta, black, white }
+        \\type Shape variant {
+        \\    point,
+        \\    tag(label string),
+        \\}
+        \\type Money decimal 2
+        \\func mixedKeyMap() bool {
+        \\    m := {}
+        \\    for i := 0; i < 20; i += 1 {
+        \\        m[i] = i
+        \\    }
+        \\    m[1.5] = "float-key"
+        \\    m[true] = "bool-true"
+        \\    m[false] = "bool-false"
+        \\    m['x'] = "rune-x"
+        \\    m[Color.red] = "enum-red"
+        \\    m[Money(9.99)] = "decimal-999"
+        \\    m[Shape.point] = "variant-point-inline"
+        \\    m[Shape.tag("hi")] = "variant-tag-heap"
+        \\    m[std.core.error("boom")] = "error-boom"
+        \\    dyn := "dyn-" + std.conv.to_string(42)
+        \\    m[dyn] = "dyn-string-key"
+        \\    view := std.bytes.slice(std.conv.to_string(123456), 1, 4)
+        \\    m[view] = "string-view-key"
+        \\    m[null] = "null-key"
+        \\
+        \\    ok := true
+        \\    for i := 0; i < 20; i += 1 {
+        \\        if m[i] != i { ok = false }
+        \\    }
+        \\    if m[1.5] != "float-key" { ok = false }
+        \\    if m[true] != "bool-true" { ok = false }
+        \\    if m[false] != "bool-false" { ok = false }
+        \\    if m['x'] != "rune-x" { ok = false }
+        \\    if m[Color.red] != "enum-red" { ok = false }
+        \\    if m[Money(9.99)] != "decimal-999" { ok = false }
+        \\    if m[Shape.point] != "variant-point-inline" { ok = false }
+        \\    if m[Shape.tag("hi")] != "variant-tag-heap" { ok = false }
+        \\    if m[std.core.error("boom")] != "error-boom" { ok = false }
+        \\    if m["dyn-42"] != "dyn-string-key" { ok = false }
+        \\    if m[view] != "string-view-key" { ok = false }
+        \\    if m[null] != "null-key" { ok = false }
+        \\    return ok
+        \\}
+        \\func mixedKeyMapNotFoundAndDelete() bool {
+        \\    m := {}
+        \\    for i := 0; i < 20; i += 1 {
+        \\        m[i] = i
+        \\    }
+        \\    m[Color.red] = "enum-red"
+        \\    m[Color.blue] = "enum-blue"
+        \\    notFound := not std.core.has(m, Color.green) and std.core.is_null(m[Color.green])
+        \\    removed := std.core.delete(m, Color.red)
+        \\    return notFound and removed == "enum-red" and not std.core.has(m, Color.red) and m[Color.blue] == "enum-blue"
+        \\}
+    );
+    try std.testing.expect((try rt.callGlobal("mixedKeyMap", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("mixedKeyMapNotFoundAndDelete", &.{})).boolean);
+}
+
+// std.core.has/std.core.delete (nativeHas/nativeDelete in core.zig) take the
+// first argument as a raw *Object with no upfront isMapObject check, unlike
+// e.g. nativeMapExtract's std.core.keys/values — they delegate straight to
+// vmmap.mapHas/vmmap.mapDelete, whose `else => return error.TypeError` arms
+// are the only thing standing between a non-map object (an array here) and
+// undefined behavior. No existing test called either native on a non-map
+// object, so these arms were unreached.
+test "compiler: std.core.has/std.core.delete raise TypeError on a non-map object" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func hasOnArray() bool { a := [1, 2, 3]; return std.core.has(a, 2) }
+        \\func deleteOnArray() int { a := [1, 2, 3]; return std.core.delete(a, 2) }
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("hasOnArray", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("deleteOnArray", &.{}));
+}
+
 // Plain int+int/int-int/int*int throughout the dispatch loop (the main
 // add/sub/mul opcodes, `+=`/inc-const fast paths, and the various fused
 // local/global/field/const/loop opcodes) used to do raw, unchecked i64
@@ -9358,4 +9554,275 @@ test "compiler: std.core.gc_stats/gc_stats_ext report sane fields; gc/gc_live_ob
     try std.testing.expect((try rt.callGlobal("gcLiveObjectsNonNegative", &.{})).boolean);
     try std.testing.expect((try rt.callGlobal("errorRoundTrip", &.{})).boolean);
     try std.testing.expect((try rt.callGlobal("namedErrorIsError", &.{})).boolean);
+}
+
+// ── std.string coverage ─────────────────────────────────────────────────
+//
+// An audit found only 8 of std.string's 25 exports (builder, fields,
+// repeat, split, split_once, starts_with, trim, trim_prefix) got any
+// exercise anywhere in the suite (compiler_test.zig + tests/spec/*.gengo),
+// and even those only on their happy paths. The tests below fill in the
+// remaining exports and the untested error/edge branches of the
+// partially-covered ones, deriving expected values directly from
+// native/string.zig's actual implementation rather than from an assumed
+// "standard" string-library convention (its split/trim/pad semantics are
+// a from-scratch reimplementation with some of its own quirks — see the
+// comments below on trim_left/trim_right vs. trim_prefix/trim_suffix,
+// and upper/lower's byte-oriented ASCII-only conversion).
+
+test "compiler: std.string.join concatenates array elements with a separator, including single-element and empty-array edge cases" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\assert std.string.join(["a", "b", "c"], "-") == "a-b-c"
+        \\assert std.string.join(["only"], "-") == "only"
+        \\assert std.string.join([], "-") == ""
+        \\assert std.string.join(["x", "y"], "") == "xy"
+    );
+}
+
+test "compiler: std.string.join raises TypeError for a non-array argument, including a non-array object like a map" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func joinNonObject() any { return std.string.join(5, ",") }
+        \\func joinNonArrayObject() any { return std.string.join({"a": 1}, ",") }
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("joinNonObject", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("joinNonArrayObject", &.{}));
+}
+
+// upper/lower (nativeStrTransform) apply std.ascii.toUpper/toLower BYTE BY
+// BYTE over the raw string bytes — there is no UTF-8 decoding step. A
+// multi-byte UTF-8 sequence's bytes are always outside the ASCII
+// 'a'-'z'/'A'-'Z' ranges, so they pass through completely unchanged
+// (the encoding of "é" is untouched — it does NOT become "É").
+test "compiler: std.string.upper/lower perform byte-oriented ASCII-only case conversion; non-ASCII bytes pass through unchanged" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\assert std.string.upper("hello World 123!") == "HELLO WORLD 123!"
+        \\assert std.string.lower("HELLO World 123!") == "hello world 123!"
+        \\assert std.string.upper("café") == "CAFé"
+        \\assert std.string.lower("CAFÉ") == "cafÉ"
+    );
+}
+
+test "compiler: std.string.contains/starts_with/ends_with cover match, no-match, and empty-substring cases" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\assert std.string.contains("hello world", "wor") == true
+        \\assert std.string.contains("hello world", "xyz") == false
+        \\assert std.string.contains("hello", "") == true
+        \\assert std.string.starts_with("hello", "he") == true
+        \\assert std.string.starts_with("hello", "lo") == false
+        \\assert std.string.starts_with("hello", "") == true
+        \\assert std.string.ends_with("hello", "lo") == true
+        \\assert std.string.ends_with("hello", "he") == false
+        \\assert std.string.ends_with("hello", "") == true
+    );
+}
+
+// index_of/last_index_of return a RUNE index, not a byte index: the found
+// byte offset is converted via utf8RuneCount(s[0..byte_idx]). "héllo" is
+// h(1 byte) + é(2 bytes, U+00E9) + "llo"; "llo" starts at byte offset 3
+// but rune offset 2 (just "h", "é"), so a byte-index implementation would
+// wrongly report 3 here.
+test "compiler: std.string.index_of/last_index_of return the FIRST/LAST match's rune offset (not byte offset), and -1 when absent" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\assert std.string.index_of("banana", "an") == 1
+        \\assert std.string.last_index_of("banana", "an") == 3
+        \\assert std.string.index_of("banana", "xyz") == -1
+        \\assert std.string.last_index_of("banana", "xyz") == -1
+        \\assert std.string.index_of("héllo", "llo") == 2
+    );
+}
+
+// std.mem.count asserts needle.len > 0 internally (for needle.len != 1),
+// so std.string.count(s, "") is NOT exercised here — it would panic the
+// process rather than raise a catchable error. See the final report for
+// this as a flagged latent bug in nativeStrCount (native/string.zig),
+// which passes the substring straight through with no empty-needle guard,
+// unlike nativeStrReplace/nativeStrSplit which explicitly special-case it.
+test "compiler: std.string.count counts non-overlapping occurrences, including the zero-occurrence case" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\assert std.string.count("aaaa", "aa") == 2
+        \\assert std.string.count("hello world", "xyz") == 0
+        \\assert std.string.count("abcabcabc", "abc") == 3
+    );
+}
+
+// Regression: nativeStrCount passed an empty substring straight to
+// std.mem.count, which asserts (a safety-check panic, not a catchable
+// Gengo error) that its needle is non-empty for any length other than
+// exactly 1 -- std.string.count(s, "") used to crash the whole process.
+// Fixed to treat an empty substring as occurring zero times.
+test "compiler: std.string.count treats an empty substring as zero occurrences instead of crashing" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\assert std.string.count("hello", "") == 0
+        \\assert std.string.count("", "") == 0
+    );
+}
+
+// pad_left/pad_right repeat `pad` to fill the needed width, truncating the
+// final repetition if it doesn't divide evenly; if `width <= len(s)` or
+// `pad` is empty, the input is returned completely unchanged (no
+// truncation happens even when s is already longer than width).
+test "compiler: std.string.pad_left/pad_right repeat-and-truncate the pad string, and no-op when already wide enough" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\assert std.string.pad_left("x", 6, "ab") == "ababax"
+        \\assert std.string.pad_right("x", 6, "ab") == "xababa"
+        \\assert std.string.pad_left("hello", 3, "0") == "hello"
+        \\assert std.string.pad_right("hello", 3, "0") == "hello"
+        \\assert std.string.pad_left("hi", 5, "") == "hi"
+        \\assert std.string.pad_right("hi", 5, "") == "hi"
+    );
+}
+
+test "compiler: std.string.pad_left/pad_right reject a negative width" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func padLeftNeg() any { return std.string.pad_left("x", -1, "0") }
+        \\func padRightNeg() any { return std.string.pad_right("x", -1, "0") }
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("padLeftNeg", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("padRightNeg", &.{}));
+}
+
+test "compiler: std.string.equal_fold compares case-insensitively, including a genuinely-different-content false case" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\assert std.string.equal_fold("Hello", "hello") == true
+        \\assert std.string.equal_fold("HELLO", "hello") == true
+        \\assert std.string.equal_fold("Hello", "World") == false
+        \\assert std.string.equal_fold("abc", "abcd") == false
+    );
+}
+
+// contains_any reports whether s contains ANY byte from `chars` (not
+// whether it contains `chars` as a substring). An empty `chars` set never
+// matches anything, even against a non-empty s.
+test "compiler: std.string.contains_any reports whether s contains any byte from a charset" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\assert std.string.contains_any("hello", "aeiou") == true
+        \\assert std.string.contains_any("xyz", "aeiou") == false
+        \\assert std.string.contains_any("hello", "") == false
+        \\assert std.string.contains_any("", "abc") == false
+    );
+}
+
+// trim_left/trim_right strip a CUTSET of individual bytes repeatedly from
+// one side, in any order/count — unlike trim_prefix/trim_suffix, which
+// strip one LITERAL string exactly once (and leave the input completely
+// unchanged if it doesn't match at that exact position). The same input
+// demonstrates the difference: "aaabbbccc" starts with several cutset
+// characters "ab" (stripped down to "ccc" by trim_left), but does NOT
+// start with the literal string "ab" (trim_prefix leaves it unchanged,
+// since the string actually starts with "aa").
+test "compiler: std.string.trim_left/trim_right strip a cutset of characters, contrasted with trim_prefix/trim_suffix's literal-string semantics" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\assert std.string.trim_left("aabbcabc", "ab") == "cabc"
+        \\assert std.string.trim_right("cabcaabb", "ab") == "cabc"
+        \\assert std.string.trim_left("aaabbbccc", "ab") == "ccc"
+        \\assert std.string.trim_prefix("aaabbbccc", "ab") == "aaabbbccc"
+        \\assert std.string.trim_prefix("hello world", "hello ") == "world"
+        \\assert std.string.trim_prefix("hello", "xyz") == "hello"
+        \\assert std.string.trim_suffix("hello.txt", ".txt") == "hello"
+        \\assert std.string.trim_suffix("hello.txt", ".png") == "hello.txt"
+    );
+}
+
+// split_n caps the number of pieces at n: like Go's strings.SplitN, the
+// LAST piece holds the unsplit remainder of the string rather than being
+// further divided, once the cap is hit. n == 0 returns an empty array; a
+// separator of "" splits at UTF-8 rune boundaries (same as split's own
+// empty-separator handling), and n greater than the number of possible
+// splits behaves the same as an unlimited split.
+test "compiler: std.string.split_n caps piece count, leaving the remainder unsplit in the last piece" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\assert std.core.deep_equal(std.string.split_n("a,b,c,d", ",", 2), ["a", "b,c,d"])
+        \\assert std.core.deep_equal(std.string.split_n("a,b", ",", 5), ["a", "b"])
+        \\assert std.core.deep_equal(std.string.split_n("abcde", "", 3), ["a", "b", "cde"])
+        \\assert std.core.deep_equal(std.string.split_n("anything", ",", 0), [])
+        \\func splitNNeg() any { return std.string.split_n("a,b", ",", -1) }
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("splitNNeg", &.{}));
+}
+
+// split always produces count+1 pieces around a literal separator (even
+// when the separator never occurs, or the input is empty), and splits at
+// UTF-8 rune boundaries when the separator is "".
+test "compiler: std.string.split covers a not-found separator and the empty-separator (rune-split) case" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\assert std.core.deep_equal(std.string.split("hello", ","), ["hello"])
+        \\assert std.core.deep_equal(std.string.split("abc", ""), ["a", "b", "c"])
+        \\assert std.core.deep_equal(std.string.split("", ","), [""])
+        \\assert std.core.deep_equal(std.string.split("", ""), [])
+    );
+}
+
+// fields splits on runs of whitespace (space/tab/\n/\r/\x0b/\x0c),
+// collapsing consecutive separators and ignoring leading/trailing
+// whitespace entirely — an all-whitespace (or empty) input yields an
+// empty array, not an array containing empty strings.
+test "compiler: std.string.fields collapses consecutive whitespace runs and ignores leading/trailing whitespace" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\assert std.core.deep_equal(std.string.fields("  a   b\tc\r\nd  "), ["a", "b", "c", "d"])
+        \\assert std.core.deep_equal(std.string.fields("   "), [])
+        \\assert std.core.deep_equal(std.string.fields(""), [])
+    );
+}
+
+// repeat's happy paths (n == 3, n == 0) are already exercised by
+// tests/spec/119_string_stdlib_more.gengo; these cover its two error
+// branches: a negative count, and a count that would overflow the
+// 64 MiB output cap (checked via a mul-with-overflow guard so a huge
+// count can't silently wrap `total` to something small and then write
+// past the allocated buffer).
+test "compiler: std.string.repeat rejects a negative count and a count exceeding the output size cap" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func repeatNeg() any { return std.string.repeat("x", -1) }
+        \\func repeatHuge() any { return std.string.repeat("x", 70000000) }
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("repeatNeg", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("repeatHuge", &.{}));
 }

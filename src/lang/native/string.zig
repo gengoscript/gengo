@@ -239,6 +239,16 @@ pub fn nativeStrSplitOnce(ctx: VMContext, s_val: Value, sep_val: Value, managed:
 }
 
 pub fn nativeStrCount(s: []const u8, sub: []const u8) Value {
+    // std.mem.count asserts (safety-check panic, not a catchable error) that
+    // its needle is non-empty for any length other than exactly 1 -- a
+    // script calling std.string.count(s, "") used to crash the whole
+    // process. Sibling functions in this file already special-case an empty
+    // separator/needle explicitly (nativeStrReplace for `old.len == 0`,
+    // nativeStrSplit/nativeStrSplitN for `sep.len == 0`); count similarly
+    // treats an empty substring as occurring zero times, matching this
+    // file's "count non-overlapping matches" contract without a degenerate
+    // infinite/undefined result.
+    if (sub.len == 0) return .{ .int = 0 };
     return .{ .int = @intCast(std.mem.count(u8, s, sub)) };
 }
 
