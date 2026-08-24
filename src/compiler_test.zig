@@ -9646,12 +9646,6 @@ test "compiler: std.string.index_of/last_index_of return the FIRST/LAST match's 
     );
 }
 
-// std.mem.count asserts needle.len > 0 internally (for needle.len != 1),
-// so std.string.count(s, "") is NOT exercised here — it would panic the
-// process rather than raise a catchable error. See the final report for
-// this as a flagged latent bug in nativeStrCount (native/string.zig),
-// which passes the substring straight through with no empty-needle guard,
-// unlike nativeStrReplace/nativeStrSplit which explicitly special-case it.
 test "compiler: std.string.count counts non-overlapping occurrences, including the zero-occurrence case" {
     var rt = try setup();
     defer rt.deinit();
@@ -9676,6 +9670,49 @@ test "compiler: std.string.count treats an empty substring as zero occurrences i
         \\assert std.string.count("hello", "") == 0
         \\assert std.string.count("", "") == 0
     );
+}
+
+// vm_string.zig's per-string rune-offset cache (ensureRuneCache) only
+// stores the first RuneCacheMax (512) rune offsets directly; indexing past
+// that falls back to utf8ByteOffsetForRuneIndex's uncached linear scan
+// (rune_idx >= RuneCacheMax branch in utf8ByteOffsetForRuneIndexCached).
+// Ordinary test strings never came close to 512 runes, so that fallback
+// path — and indexing/slicing on .dyn_string/.string_view (not just the
+// static .string case) at multi-byte rune positions — was untested.
+// "é" is 2 bytes/1 rune; std.string.repeat builds this as a real
+// heap dyn_string (not a compile-time literal), and slicing it below
+// yields a string_view over that dyn_string's backing bytes.
+test "compiler: rune-indexed string access past the 512-entry rune cache falls back correctly, on dyn_string and string_view too" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\s := std.string.repeat("é", 600)
+        \\assert std.core.len(s) == 600
+        \\assert s[0] == "é"
+        \\assert s[511] == "é"
+        \\assert s[512] == "é"
+        \\assert s[599] == "é"
+        \\
+        \\view := s[500:599]
+        \\assert std.core.len(view) == 99
+        \\assert view[0] == "é"
+        \\assert view[98] == "é"
+    );
+}
+
+test "compiler: rune-indexed string slicing rejects an out-of-range or backwards range" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\func indexOob() string { return "abc"[10] }
+        \\func sliceOob() string { return "abc"[0:10] }
+        \\func sliceBackwards() string { return "abcde"[3:1] }
+    );
+    try std.testing.expectError(error.IndexOutOfBounds, rt.callGlobal("indexOob", &.{}));
+    try std.testing.expectError(error.IndexOutOfBounds, rt.callGlobal("sliceOob", &.{}));
+    try std.testing.expectError(error.IndexOutOfBounds, rt.callGlobal("sliceBackwards", &.{}));
 }
 
 // pad_left/pad_right repeat `pad` to fill the needed width, truncating the
