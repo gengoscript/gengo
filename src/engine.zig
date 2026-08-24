@@ -1151,7 +1151,16 @@ export fn engine_register_module(handle: i32, name_ptr: PtrInt, name_len: i32, f
     @memcpy(slot.name[0..slot.name_len], name[0..slot.name_len]);
 
     if (funcs_count > 0 and funcs_ptr == 0) return -4;
-    const func_defs = @as([*]const HostModuleFuncDef, @ptrFromInt(@as(usize, @intCast(funcs_ptr))))[0..@as(usize, @intCast(funcs_count))];
+    // funcs_count == 0 is a legitimate "this module exports nothing" call —
+    // @ptrFromInt to the non-optional []const HostModuleFuncDef pointer type
+    // panics (Zig safety check: "cast causes pointer to be null") on a zero
+    // funcs_ptr regardless of the slice length being empty, so the cast must
+    // be skipped entirely rather than relying on the empty range to make it
+    // harmless.
+    const func_defs: []const HostModuleFuncDef = if (funcs_count == 0)
+        &.{}
+    else
+        @as([*]const HostModuleFuncDef, @ptrFromInt(@as(usize, @intCast(funcs_ptr))))[0..@as(usize, @intCast(funcs_count))];
     for (func_defs, 0..) |fd, i| {
         const fname = wasmSlice(fd.name_ptr, @intCast(fd.name_len));
         if (fname.len > engine.host_module_func_name_bufs[engine.host_module_count][i].len) return -5;
@@ -2520,4 +2529,416 @@ test "engine_destroy is a safe no-op on an inactive or already-destroyed handle"
     defer engine_destroy(h2);
     const src = "x := 1 + 1\n";
     try std.testing.expectEqual(0, engine_run(h2, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+}
+
+// Mechanical sweep: an invalid (never-allocated) handle must produce the
+// documented sentinel from every getEngine()-guarded export, and must never
+// crash the void-returning ones. This is the single largest source of
+// previously-uncovered lines in this file: each export's own early
+// handle-validation branch.
+test "invalid handle returns the documented sentinel across the engine_* surface" {
+    const bad: i32 = 99999; // never allocated by any test in this file
+    const empty = "";
+    var dummy_wire: ValueWire = undefined;
+
+    try std.testing.expectEqual(@as(i32, -1), engine_run(bad, @intCast(@intFromPtr(empty.ptr)), 0));
+    try std.testing.expectEqual(@as(i32, -1), engine_run_path(bad, @intCast(@intFromPtr(empty.ptr)), 0, @intCast(@intFromPtr(empty.ptr)), 0));
+    try std.testing.expectEqual(@as(i32, -1), engine_begin(bad, @intCast(@intFromPtr(empty.ptr)), 0));
+    try std.testing.expectEqual(@as(i32, -1), engine_continue(bad));
+    try std.testing.expectEqual(@as(i64, -1), engine_sleep_remaining_ms(bad));
+    try std.testing.expectEqual(@as(i32, -1), engine_call(bad, @intCast(@intFromPtr(empty.ptr)), 0, 0, 0, @intCast(@intFromPtr(&dummy_wire))));
+    engine_reset(bad); // must be a safe no-op, not a crash
+    try std.testing.expectEqual(@as(i32, -1), engine_add_source(bad, @intCast(@intFromPtr(empty.ptr)), 0, @intCast(@intFromPtr(empty.ptr)), 0));
+    try std.testing.expectEqual(@as(i32, -1), engine_set_import_loader(bad, null, null));
+    try std.testing.expectEqual(@as(i32, -1), engine_set_host_call_fn(bad, null, null));
+    try std.testing.expectEqual(@as(i32, -1), engine_register_module(bad, @intCast(@intFromPtr(empty.ptr)), 0, 0, 0));
+    // Non-zero out-of-range handle: no init-time (g_init_error) fallback.
+    try std.testing.expectEqual(@as(i32, 0), engine_last_error(bad, 0, 0));
+    try std.testing.expectEqual(@as(i32, 0), engine_last_error_line(bad));
+    try std.testing.expectEqual(@as(i32, 0), engine_last_error_col(bad));
+    try std.testing.expectEqual(@as(i32, 0), engine_last_error_path(bad, 0, 0));
+    engine_set_write_fn(bad, null); // safe no-op
+    engine_set_read_fn(bad, null); // safe no-op
+    engine_set_net_handlers(bad, null, null); // safe no-op
+    engine_set_http_handler(bad, null, null); // safe no-op
+    try std.testing.expectEqual(@as(i32, -1), engine_mount_dir(bad, @intCast(@intFromPtr(empty.ptr)), 0, @intCast(@intFromPtr(empty.ptr)), 0));
+    try std.testing.expectEqual(@as(i32, -1), engine_mount_driver(bad, @intCast(@intFromPtr(empty.ptr)), 0, 0, null));
+    try std.testing.expectEqual(@as(i32, -1), engine_get_global(bad, @intCast(@intFromPtr(empty.ptr)), 0, 0));
+    try std.testing.expectEqual(@as(i32, -1), engine_list_globals(bad, null, null));
+    try std.testing.expectEqual(@as(i32, -1), engine_list_functions(bad, null, null));
+    engine_set_trace_fn(bad, null, null); // safe no-op
+    engine_net_policy_clear(bad); // safe no-op
+    engine_net_listen_policy_clear(bad); // safe no-op
+    try std.testing.expectEqual(@as(i32, -1), engine_load_bundle(bad, @intCast(@intFromPtr(empty.ptr)), 0, @intCast(@intFromPtr(empty.ptr)), 0));
+    if (comptime !is_wasm) {
+        try std.testing.expectEqual(@as(i32, -1), engine_load_bundle_dir(bad, @intCast(@intFromPtr(empty.ptr)), 0, @intCast(@intFromPtr(empty.ptr)), 0));
+    }
+    engine_clear_bundles(bad); // safe no-op
+}
+
+test "engine_init_with_config rejects a null config pointer and surfaces it via the handle-0 fallback" {
+    const rc = engine_init_with_config(0);
+    try std.testing.expectEqual(@as(i32, -3), rc);
+
+    // engine_last_error(0, ...) is the documented fallback for the init-time
+    // (pre-handle) error buffer, distinct from any live engine's own error.
+    var buf: [128]u8 = undefined;
+    const n = engine_last_error(0, @intCast(@intFromPtr(&buf)), buf.len);
+    try std.testing.expect(n > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@as(usize, @intCast(n))], "config pointer is null") != null);
+}
+
+test "engine_init_with_config rejects config fields above the compiled-in preset ceiling" {
+    const base: InstanceConfig = .{
+        .heap_size_bytes = cfg.heap_size_bytes,
+        .max_objects = cfg.max_objects,
+        .max_stack = cfg.max_stack,
+        .max_frames = cfg.max_frames,
+        .max_defers = cfg.max_defers,
+        .max_ops = -1,
+        .allow_io = false,
+    };
+
+    var over_heap = base;
+    over_heap.heap_size_bytes = cfg.heap_size_bytes + 1;
+    try std.testing.expectEqual(@as(i32, -3), engine_init_with_config(@intFromPtr(&over_heap)));
+
+    var over_objects = base;
+    over_objects.max_objects = cfg.max_objects + 1;
+    try std.testing.expectEqual(@as(i32, -3), engine_init_with_config(@intFromPtr(&over_objects)));
+
+    var over_stack = base;
+    over_stack.max_stack = cfg.max_stack + 1;
+    try std.testing.expectEqual(@as(i32, -3), engine_init_with_config(@intFromPtr(&over_stack)));
+
+    var over_frames = base;
+    over_frames.max_frames = cfg.max_frames + 1;
+    try std.testing.expectEqual(@as(i32, -3), engine_init_with_config(@intFromPtr(&over_frames)));
+
+    var over_defers = base;
+    over_defers.max_defers = cfg.max_defers + 1;
+    try std.testing.expectEqual(@as(i32, -3), engine_init_with_config(@intFromPtr(&over_defers)));
+}
+
+test "engine_last_error reports the full message length regardless of out_max_len" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const bad_src = "func broken( {\n";
+    try std.testing.expectEqual(@as(i32, -1), engine_run(h, @intCast(@intFromPtr(bad_src.ptr)), @intCast(bad_src.len)));
+
+    // out_ptr == 0: report the length without touching memory.
+    const len_only = engine_last_error(h, 0, 0);
+    try std.testing.expect(len_only > 0);
+
+    // A too-small destination buffer still reports the FULL length (per the
+    // implementation's doc comment), just copies fewer bytes.
+    var small_buf: [4]u8 = undefined;
+    const truncated_len = engine_last_error(h, @intCast(@intFromPtr(&small_buf)), small_buf.len);
+    try std.testing.expectEqual(len_only, truncated_len);
+
+    var full_buf: [MaxErrorLen]u8 = undefined;
+    const full_len = engine_last_error(h, @intCast(@intFromPtr(&full_buf)), full_buf.len);
+    try std.testing.expectEqual(len_only, full_len);
+    try std.testing.expect(std.mem.indexOf(u8, full_buf[0..@as(usize, @intCast(full_len))], "compile error") != null);
+}
+
+test "engine_reset clears globals so a handle can be cleanly reused" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src1 = "x := 42\n";
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src1.ptr)), @intCast(src1.len)));
+    var wire: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_get_global(h, @intCast(@intFromPtr("x".ptr)), 1, @intCast(@intFromPtr(&wire))));
+
+    engine_reset(h);
+
+    // The prior run's global must be gone after reset.
+    try std.testing.expectEqual(@as(i32, -2), engine_get_global(h, @intCast(@intFromPtr("x".ptr)), 1, @intCast(@intFromPtr(&wire))));
+
+    // The handle must still be usable for a fresh run.
+    const src2 = "y := 99\n";
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src2.ptr)), @intCast(src2.len)));
+    try std.testing.expectEqual(0, engine_get_global(h, @intCast(@intFromPtr("y".ptr)), 1, @intCast(@intFromPtr(&wire))));
+}
+
+fn testImportLoaderCallback(ctx: ?*anyopaque, path_ptr: PtrInt, path_len: i32, out_ptr: PtrInt, out_max_len: i32) callconv(.c) i32 {
+    _ = ctx;
+    const path = wasmSlice(path_ptr, path_len);
+    if (!std.mem.eql(u8, path, "libmod")) return -1;
+    const src = "pub func hello() int { return 7 }";
+    if (src.len > @as(usize, @intCast(out_max_len))) return -1;
+    const dest = wasmSliceMut(out_ptr, @intCast(src.len));
+    @memcpy(dest, src);
+    return @intCast(src.len);
+}
+
+test "engine_set_import_loader resolves host-provided module source" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    try std.testing.expectEqual(@as(i32, 0), engine_set_import_loader(h, testImportLoaderCallback, null));
+
+    const src =
+        \\lib := import("libmod")
+        \\pub func run() int { return lib.hello() }
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+
+    var out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(h, @intCast(@intFromPtr("run".ptr)), 3, 0, 0, @intCast(@intFromPtr(&out))));
+    try std.testing.expectEqual(@as(i64, 7), @as(i64, @bitCast(out.payload)));
+}
+
+test "engine_register_module validates module name, func table shape, and module table capacity" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const empty_name = "";
+    try std.testing.expectEqual(@as(i32, -5), engine_register_module(h, @intCast(@intFromPtr(empty_name.ptr)), 0, 0, 0));
+
+    const at_name = "@bad";
+    try std.testing.expectEqual(@as(i32, -5), engine_register_module(h, @intCast(@intFromPtr(at_name.ptr)), @intCast(at_name.len), 0, 0));
+
+    const dot_name = "a.b";
+    try std.testing.expectEqual(@as(i32, -5), engine_register_module(h, @intCast(@intFromPtr(dot_name.ptr)), @intCast(dot_name.len), 0, 0));
+
+    const ctrl_name = "a\x01b";
+    try std.testing.expectEqual(@as(i32, -5), engine_register_module(h, @intCast(@intFromPtr(ctrl_name.ptr)), @intCast(ctrl_name.len), 0, 0));
+
+    // funcs_count out of range.
+    const good_name = "ok";
+    try std.testing.expectEqual(@as(i32, -4), engine_register_module(h, @intCast(@intFromPtr(good_name.ptr)), @intCast(good_name.len), 0, -1));
+    try std.testing.expectEqual(@as(i32, -4), engine_register_module(h, @intCast(@intFromPtr(good_name.ptr)), @intCast(good_name.len), 0, MaxHostModuleFuncs + 1));
+    // funcs_count > 0 but funcs_ptr == 0.
+    try std.testing.expectEqual(@as(i32, -4), engine_register_module(h, @intCast(@intFromPtr(good_name.ptr)), @intCast(good_name.len), 0, 1));
+
+    // arity above 255.
+    const bad_arity_funcs = [_]HostModuleFuncDef{.{ .name_ptr = @intCast(@intFromPtr("f".ptr)), .name_len = 1, .arity = 256 }};
+    try std.testing.expectEqual(@as(i32, -4), engine_register_module(h, @intCast(@intFromPtr(good_name.ptr)), @intCast(good_name.len), @intCast(@intFromPtr(&bad_arity_funcs)), bad_arity_funcs.len));
+
+    // func name too long (> 64 bytes).
+    const long_fname = "f" ** 65;
+    const long_fname_funcs = [_]HostModuleFuncDef{.{ .name_ptr = @intCast(@intFromPtr(long_fname.ptr)), .name_len = @intCast(long_fname.len), .arity = 0 }};
+    try std.testing.expectEqual(@as(i32, -5), engine_register_module(h, @intCast(@intFromPtr(good_name.ptr)), @intCast(good_name.len), @intCast(@intFromPtr(&long_fname_funcs)), long_fname_funcs.len));
+
+    // Fill the module table to capacity, then confirm the next registration
+    // reports the table-full sentinel.
+    //
+    // Regression: engine_register_module used to unconditionally
+    // @ptrFromInt(@intCast(funcs_ptr)) to a non-optional `[*]const
+    // HostModuleFuncDef` before ever looking at funcs_count, so the natural
+    // "this module exports no functions" call — funcs_ptr=0, funcs_count=0
+    // — panicked with "cast causes pointer to be null" even though the
+    // resulting slice would be zero-length. Fixed to skip the cast entirely
+    // when funcs_count == 0; this loop now exercises that real (0, 0) call
+    // shape directly instead of working around it with a dummy pointer.
+    var name_buf: [MaxHostModules][8]u8 = undefined;
+    var i: usize = 0;
+    while (i < MaxHostModules) : (i += 1) {
+        const n = std.fmt.bufPrint(&name_buf[i], "m{d}", .{i}) catch unreachable;
+        try std.testing.expectEqual(@as(i32, 0), engine_register_module(h, @intCast(@intFromPtr(n.ptr)), @intCast(n.len), 0, 0));
+    }
+    const overflow_name = "overflow";
+    try std.testing.expectEqual(@as(i32, -3), engine_register_module(h, @intCast(@intFromPtr(overflow_name.ptr)), @intCast(overflow_name.len), 0, 0));
+}
+
+test "engine_set_net_handlers and engine_set_http_handler register and clear per-engine handler state" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const engine = getEngine(h).?;
+    try std.testing.expect(engine.runtime.inner.net_es.handlers == null);
+    try std.testing.expect(engine.runtime.inner.http_es.handler == null);
+
+    const handlers: net_state.GengoNetHandlers = .{
+        .dial = null,
+        .read = null,
+        .write = null,
+        .close = null,
+        .local_addr = null,
+        .remote_addr = null,
+        .set_deadline = null,
+        .set_read_deadline = null,
+        .set_write_deadline = null,
+    };
+    engine_set_net_handlers(h, &handlers, null);
+    try std.testing.expect(engine.runtime.inner.net_es.handlers != null);
+
+    engine_set_net_handlers(h, null, null);
+    try std.testing.expect(engine.runtime.inner.net_es.handlers == null);
+
+    const HttpCb = struct {
+        fn cb(req: *const http_state.GengoHttpRequest, out: *http_state.GengoHttpResponse, userdata: ?*anyopaque) callconv(.c) c_int {
+            _ = req;
+            _ = out;
+            _ = userdata;
+            return 0;
+        }
+    };
+    engine_set_http_handler(h, HttpCb.cb, null);
+    try std.testing.expect(engine.runtime.inner.http_es.handler != null);
+
+    engine_set_http_handler(h, null, null);
+    try std.testing.expect(engine.runtime.inner.http_es.handler == null);
+}
+
+test "engine_mount_dir and engine_mount_driver register mounts and reject invalid names" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const name = "data";
+    const path = "/tmp";
+    try std.testing.expectEqual(@as(i32, 0), engine_mount_dir(h, @intCast(@intFromPtr(name.ptr)), @intCast(name.len), @intCast(@intFromPtr(path.ptr)), @intCast(path.len)));
+
+    // Invalid mount name (contains '/') -> -2.
+    const bad_name = "a/b";
+    try std.testing.expectEqual(@as(i32, -2), engine_mount_dir(h, @intCast(@intFromPtr(bad_name.ptr)), @intCast(bad_name.len), @intCast(@intFromPtr(path.ptr)), @intCast(path.len)));
+
+    var driver: fs_state.FsDriver = .{};
+    const vfs_name = "vfs";
+    try std.testing.expectEqual(@as(i32, 0), engine_mount_driver(h, @intCast(@intFromPtr(vfs_name.ptr)), @intCast(vfs_name.len), @intCast(@intFromPtr(&driver)), null));
+    try std.testing.expectEqual(@as(i32, -2), engine_mount_driver(h, @intCast(@intFromPtr(bad_name.ptr)), @intCast(bad_name.len), @intCast(@intFromPtr(&driver)), null));
+
+    // Invalid handle.
+    const bad: i32 = 99999;
+    try std.testing.expectEqual(@as(i32, -1), engine_mount_dir(bad, @intCast(@intFromPtr(name.ptr)), @intCast(name.len), @intCast(@intFromPtr(path.ptr)), @intCast(path.len)));
+    try std.testing.expectEqual(@as(i32, -1), engine_mount_driver(bad, @intCast(@intFromPtr(name.ptr)), @intCast(name.len), @intCast(@intFromPtr(&driver)), null));
+}
+
+test "engine_load_bundle rejects invalid arguments and malformed zip data" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const name = "pkg";
+    const bad_zip = "not a zip file";
+    // name_len <= 0
+    try std.testing.expectEqual(@as(i32, -5), engine_load_bundle(h, @intCast(@intFromPtr(name.ptr)), 0, @intCast(@intFromPtr(bad_zip.ptr)), @intCast(bad_zip.len)));
+    // zip_len <= 0
+    try std.testing.expectEqual(@as(i32, -5), engine_load_bundle(h, @intCast(@intFromPtr(name.ptr)), @intCast(name.len), @intCast(@intFromPtr(bad_zip.ptr)), 0));
+    // malformed zip data
+    try std.testing.expectEqual(@as(i32, -5), engine_load_bundle(h, @intCast(@intFromPtr(name.ptr)), @intCast(name.len), @intCast(@intFromPtr(bad_zip.ptr)), @intCast(bad_zip.len)));
+
+    // Invalid handle.
+    try std.testing.expectEqual(@as(i32, -1), engine_load_bundle(99999, @intCast(@intFromPtr(name.ptr)), @intCast(name.len), @intCast(@intFromPtr(bad_zip.ptr)), @intCast(bad_zip.len)));
+}
+
+test "engine_load_bundle_dir loads .gengo files from a real host directory" {
+    if (comptime is_wasm) return;
+
+    const io_ctx = std.Io.Threaded.global_single_threaded.io();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(tmp_path);
+
+    const lib_src = "pub func hello() string { return \"dirbundle\" }";
+    try tmp.dir.writeFile(io_ctx, .{ .sub_path = "greet.gengo", .data = lib_src });
+
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const name = "dirlib";
+    const rc = engine_load_bundle_dir(h, @intCast(@intFromPtr(name.ptr)), @intCast(name.len), @intCast(@intFromPtr(tmp_path.ptr)), @intCast(tmp_path.len));
+    try std.testing.expectEqual(@as(i32, 0), rc);
+
+    const src =
+        \\const greet = import("dirlib/greet")
+        \\pub func run() string { return greet.hello() }
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+
+    var out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(h, @intCast(@intFromPtr("run".ptr)), 3, 0, 0, @intCast(@intFromPtr(&out))));
+    const s = @as([*]const u8, @ptrFromInt(@as(usize, @bitCast(out.payload))))[0..out.len];
+    try std.testing.expectEqualStrings("dirbundle", s);
+
+    // Invalid handle.
+    try std.testing.expectEqual(@as(i32, -1), engine_load_bundle_dir(99999, @intCast(@intFromPtr(name.ptr)), @intCast(name.len), @intCast(@intFromPtr(tmp_path.ptr)), @intCast(tmp_path.len)));
+}
+
+var engine_write_test_buf: [256]u8 = undefined;
+var engine_write_test_len: usize = 0;
+
+// WriteCallback carries no userdata parameter, so the destination for
+// captured output must be a plain global rather than a closure — same
+// constraint runtime/io.zig's own write-override tests work under.
+fn engineWriteTestCapture(ptr: [*]const u8, len: i32, is_stderr: i32) callconv(.c) void {
+    _ = is_stderr;
+    const l: usize = @intCast(len);
+    @memcpy(engine_write_test_buf[engine_write_test_len..][0..l], ptr[0..l]);
+    engine_write_test_len += l;
+}
+
+test "engine_set_write_fn routes script output through the host callback instead of real stdio" {
+    const config: InstanceConfig = .{
+        .heap_size_bytes = @min(cfg.heap_size_bytes, 1024 * 1024),
+        .max_objects = @min(cfg.max_objects, 2048),
+        .max_stack = @min(cfg.max_stack, 512),
+        .max_frames = @min(cfg.max_frames, 64),
+        .max_defers = @min(cfg.max_defers, 128),
+        .max_ops = -1,
+        .allow_io = true,
+    };
+    const h = engine_init_with_config(@intFromPtr(&config));
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    engine_write_test_len = 0;
+    engine_set_write_fn(h, engineWriteTestCapture);
+
+    const src =
+        \\std := import("std")
+        \\std.io.print("hello")
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+    try std.testing.expectEqualStrings("hello", engine_write_test_buf[0..engine_write_test_len]);
+}
+
+// ReadCallback likewise carries no userdata parameter; this one is
+// stateless (always hands back the same canned line) so it needs no global.
+fn engineReadTestCallback(ptr: [*]u8, max_len: i32, is_line: i32) callconv(.c) i32 {
+    _ = is_line;
+    const s = "hello\n";
+    const n = @min(@as(usize, @intCast(max_len)), s.len);
+    @memcpy(ptr[0..n], s[0..n]);
+    return @intCast(n);
+}
+
+test "engine_set_read_fn routes std.io.readline through the host callback" {
+    const config: InstanceConfig = .{
+        .heap_size_bytes = @min(cfg.heap_size_bytes, 1024 * 1024),
+        .max_objects = @min(cfg.max_objects, 2048),
+        .max_stack = @min(cfg.max_stack, 512),
+        .max_frames = @min(cfg.max_frames, 64),
+        .max_defers = @min(cfg.max_defers, 128),
+        .max_ops = -1,
+        .allow_io = true,
+    };
+    const h = engine_init_with_config(@intFromPtr(&config));
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    engine_set_read_fn(h, engineReadTestCallback);
+
+    const src =
+        \\std := import("std")
+        \\pub func get_line() string { return std.io.readline() }
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+
+    var out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(h, @intCast(@intFromPtr("get_line".ptr)), 8, 0, 0, @intCast(@intFromPtr(&out))));
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.string)), out.tag);
+    const s = @as([*]const u8, @ptrFromInt(@as(usize, @bitCast(out.payload))))[0..out.len];
+    try std.testing.expectEqualStrings("hello", s);
 }

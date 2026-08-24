@@ -1857,6 +1857,23 @@ fn opGetLocalGetField(ctx: VMContext) !void {
         }
     }
     const container = vms.unboxNamed(raw);
+    // Mirrors opGetField's identical .inline_variant handling: without this,
+    // `x.field` on a LOCAL variable holding a small/inline-representable
+    // variant payload wrongly fell through to the object-only TypeError
+    // below, even though the exact same access on a non-local receiver (a
+    // call result, or a large/heap-represented variant) worked correctly
+    // via opGetField.
+    if (container == .inline_variant) {
+        const iv = container.inline_variant;
+        const name = (try ctx.cs.constAt(name_idx)).string.bytes;
+        const ordinal = vmod.inlineVariantOrdinal(iv);
+        const arm = vmod.objectAtIdx(iv.typ_idx).variant_type.arms[ordinal];
+        if (arm.has_payload and common.streq(arm.payload_name, name)) {
+            try ctx.vs.vmPush(vmod.inlineVariantPayload(iv));
+            return;
+        }
+        return error.TypeError;
+    }
     if (container != .object) return error.TypeError;
     try pushFieldFromObject(ctx, container.object, name_idx, ic_base, ic_type_idx, ic_fidx);
 }

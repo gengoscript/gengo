@@ -1571,7 +1571,17 @@ fn parseConstProduct(c: anytype, cursor: *ConstExprCursor) anyerror!?ct.CompileT
             .number => |n| n,
             else => return null,
         };
-        if (rhs == 0) return null;
+        // A zero right operand is only actually undefined for the
+        // division-family operators (/, div, rem, mod) -- `x * 0` and
+        // `x ** 0` are perfectly well-defined and involve no division. This
+        // check used to run unconditionally for every operator in this
+        // loop, so a compile-time-const expression like `5 * 0` or `5 ** 0`
+        // was wrongly rejected as "not a compile-time constant" instead of
+        // evaluating to 0/1.
+        switch (op) {
+            .slash, .kw_div, .kw_rem, .kw_mod => if (rhs == 0) return null,
+            else => {},
+        }
         value = .{ .number = switch (op) {
             .star => lhs * rhs,
             .star_star => std.math.pow(f64, lhs, rhs),

@@ -807,6 +807,19 @@ pub const Compiler = struct {
                     return error.TypeError;
                 }
                 if (arg_info.prim) |arg_p| {
+                    // Same exception checkFieldValueCompatibility already
+                    // applies (see its own doc comment): coerceErasedValueForSpec
+                    // (vm_types.zig) does nothing for plain-prim specs, so
+                    // matchesTypeAlt runs directly against the uncoerced
+                    // value at runtime -- and matchesTypeAlt's .int/.float
+                    // arms are `v == .int or v == .rune` / `v == .float or
+                    // v == .rune`. Without this exception here, a direct
+                    // call passing a rune literal to an int/float parameter
+                    // (e.g. takeInt(`A`)) was wrongly rejected at compile
+                    // time even though the runtime, and the struct-field
+                    // and proven-arg compatibility checks, all agree it's
+                    // fine.
+                    if ((alt.typ == .int or alt.typ == .float) and arg_p == .rune) return;
                     const expected_prim: PrimType = switch (alt.typ) {
                         .int => .int,
                         .float => .float,

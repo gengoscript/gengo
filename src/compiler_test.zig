@@ -739,6 +739,32 @@ test "runtime: compileOnly and runPathWithProvider agree on nested import lookup
     try std.testing.expectEqualStrings("dep.gengo", compile_snapshot.path);
 }
 
+test "compiler: emitModuleObject builds an empty struct for a module whose declarations are all private (zero exports)" {
+    // emitModuleObject (compiler.zig) always runs at the end of a module's
+    // compilation regardless of export_count — with none, its
+    // `fields[0..self.export_count]`/`self.exports[0..self.export_count]`
+    // loops both iterate zero times and it still builds+installs a
+    // (fieldless) struct-type constant and def_globals it under the
+    // module's binding name.
+    const main_src =
+        \\m := import("./empty")
+    ;
+    const dep_src =
+        \\type Secret int
+        \\func helper() int { return 1 }
+    ;
+    const source_entries = [_]module_compile.SourceEntry{
+        .{ .path = "main.gengo", .source = main_src },
+        .{ .path = "empty.gengo", .source = dep_src },
+    };
+
+    var rt = try setup();
+    defer rt.deinit();
+
+    const outcome = try rt.runPathWithSources(main_src, "main.gengo", &source_entries);
+    try std.testing.expectEqual(vm.RunOutcome.completed, outcome);
+}
+
 test "api runtime: rooted entrypoints agree on compile and runtime error mapping" {
     const bad_src =
         \\func broken( {
@@ -1582,6 +1608,150 @@ test "compiler: defused named-type interface arg survives gc stress reification"
     vm.VMContext.fromActive().vs.resetExec();
 
     try vm.run(vm.VMContext.fromActive());
+}
+
+// ── Interface structural conformance (structConformsToInterface) ───────────
+//
+// structConformsToInterface (compiler.zig) is the compile-time analogue of
+// vm_types.zig's matchesInterfaceType: given a real STRUCT static type (not
+// a named-type receiver — those have no struct_type tracked in ExprPrimInfo
+// and always fall back to the runtime check, see the
+// "defused named-type interface arg" test above), it walks the interface's
+// method list and proves conformance by looking up "Struct.method" in the
+// registry and comparing shapes via type_shapes.interfaceMethodMatches.
+// It is consumed two ways: argProvenForParam (sets the call's 0x80
+// proven-args byte, skipping runtime enforcement) and varTypeCheckProven
+// (skips emitting the assert_interface epilog on a var decl). Returning
+// false from either "doesn't conform" or "can't prove it" is not an error by
+// itself — it just means the runtime assert_interface/matchesInterfaceType
+// check still runs, and that check enforces the exact same rule.
+
+test "compiler: a struct fully implementing an interface proves conformance and sets the call's proven-args bit" {
+    // p is a FUNCTION-LOCAL (get_local at the call site), not a top-level
+    // global — a top-level `p := Point{...}` read back as a call argument
+    // would fuse (get_global "f"; get_global "p"; call 1 -> get_global_call,
+    // since the arg-loading get_global directly precedes the call), and the
+    // call result is bound to a local before returning rather than returned
+    // directly — a `return f(p)` tail call fuses `call` immediately followed
+    // by `ret` into `call_tail`. findCallArgcByte only recognizes the plain,
+    // unfused `.call` opcode, so both fusions need dodging here.
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Point struct { x int, y int }
+        \\func (p Point) area() int { return p.x * p.y }
+        \\type Shaped interface { area() int }
+        \\func f(s Shaped) int { return s.area() }
+        \\func caller() int {
+        \\    p := Point { x: 3, y: 4 }
+        \\    r := f(p)
+        \\    return r
+        \\}
+    );
+    const c = rt.chunk_state;
+    const argc_byte = findCallArgcByte(c) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u8, 1 | 0x80), argc_byte);
+}
+
+test "compiler: a struct missing an interface method cannot be proven, and the runtime assert_interface catches it" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Circle struct { r int }
+        \\type Shaped interface { area() int }
+        \\func f(s Shaped) int { return s.area() }
+        \\func caller() int {
+        \\    c := Circle { r: 5 }
+        \\    r := f(c)
+        \\    return r
+        \\}
+    );
+    const cs = rt.chunk_state;
+    const argc_byte = findCallArgcByte(cs) orelse return error.TestUnexpectedResult;
+    // structConformsToInterface's per-method registry.getGlobalFuncObj lookup
+    // misses entirely (Circle never defines area()) — the loop's `orelse
+    // return false` fires, so the call is left unproven.
+    try std.testing.expectEqual(@as(u8, 0), argc_byte & 0x80);
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try runSrc(&rt2,
+        \\type Circle struct { r int }
+        \\type Shaped interface { area() int }
+        \\func f(s Shaped) int { return s.area() }
+        \\func caller() int {
+        \\    c := Circle { r: 5 }
+        \\    return f(c)
+        \\}
+    );
+    try std.testing.expectError(error.TypeError, rt2.callGlobal("caller", &.{}));
+}
+
+test "compiler: a struct method with a mismatched signature also fails to prove interface conformance" {
+    // Circle.area exists (unlike the missing-method test above) but takes an
+    // extra explicit parameter the interface doesn't declare — this exercises
+    // type_shapes.interfaceMethodMatches' arity mismatch, a different
+    // structConformsToInterface `return false` site than the missing-method
+    // case (registry.getGlobalFuncObj succeeds; the shape check fails).
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Circle struct { r int }
+        \\func (c Circle) area(scale int) int { return c.r * scale }
+        \\type Shaped interface { area() int }
+        \\func f(s Shaped) int { return s.area() }
+        \\func caller() int {
+        \\    c := Circle { r: 5 }
+        \\    r := f(c)
+        \\    return r
+        \\}
+    );
+    const cs = rt.chunk_state;
+    const argc_byte = findCallArgcByte(cs) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u8, 0), argc_byte & 0x80);
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try runSrc(&rt2,
+        \\type Circle struct { r int }
+        \\func (c Circle) area(scale int) int { return c.r * scale }
+        \\type Shaped interface { area() int }
+        \\func f(s Shaped) int { return s.area() }
+        \\func caller() int {
+        \\    c := Circle { r: 5 }
+        \\    return f(c)
+        \\}
+    );
+    try std.testing.expectError(error.TypeError, rt2.callGlobal("caller", &.{}));
+}
+
+test "compiler: var decl with an explicit interface type proves conformance (skips the runtime check) when the struct fully implements it" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Point struct { x int, y int }
+        \\func (p Point) area() int { return p.x * p.y }
+        \\type Shaped interface { area() int }
+        \\func h() int {
+        \\    var s Shaped = Point{x:3,y:4}
+        \\    return s.area()
+        \\}
+    );
+    const result = try rt.callGlobal("h", &.{});
+    try std.testing.expectEqual(@as(i64, 12), result.int);
+}
+
+test "compiler: var decl with an explicit interface type falls back to the runtime assert_interface when the struct doesn't conform" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Circle struct { r int }
+        \\type Shaped interface { area() int }
+        \\func g() {
+        \\    var s Shaped = Circle{r:1}
+        \\}
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("g", &.{}));
 }
 
 test "compiler: std.core.type_of on named local lowers to nominal type string" {
@@ -3606,6 +3776,53 @@ test "compiler: field_add_const increments correctly across repeated calls" {
     );
 }
 
+// ── Local/upvalue const-shadowing (resolveLocalConst / resolveUpvalueConst) ─
+//
+// ensureMutableBinding checks resolveLocalConst before resolveUpvalueConst
+// before the global-const path (registry.hasGlobalConst) — all three raise
+// the same AssignToConst error via constAssignErr, but only the global path
+// had dedicated compiler_test.zig coverage before this.
+
+test "compiler: assigning to a function-local const is a distinct AssignToConst error from the global-const path" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\func f() int {
+        \\    const x = 1
+        \\    x = 2
+        \\    return x
+        \\}
+    );
+    try std.testing.expectEqual(error.AssignToConst, r.err);
+    try std.testing.expectEqual(@as(u32, 3), r.line);
+    try std.testing.expectEqualStrings("cannot assign to const variable 'x'", r.msg);
+
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try std.testing.expectError(error.AssignToConst, rt2.run(
+        \\func f() int {
+        \\    const x = 1
+        \\    x = 2
+        \\    return x
+        \\}
+    ));
+}
+
+test "compiler: assigning to an outer function's const captured as an upvalue is AssignToConst" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\func outer() func() int {
+        \\    const c = 1
+        \\    return func() int {
+        \\        c = 2
+        \\        return c
+        \\    }
+        \\}
+    );
+    try std.testing.expectEqual(error.AssignToConst, r.err);
+}
+
 test "compiler: field_add_const preserves const-field and named-type checks" {
     // field_add_const delegates the write to opSetField verbatim rather than
     // reimplementing its type-coercion/const-field logic — this guards that
@@ -3773,6 +3990,230 @@ test "compiler: call through an indirect/unknown callee does not set the proven 
     const c = rt.chunk_state;
     const argc_byte = findCallArgcByte(c) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(u8, 0), argc_byte & 0x80);
+}
+
+// ── Compile-time call-arg / struct-field type compatibility checks ─────────
+//
+// checkDirectCallArgCompatibility (direct-call arguments) and
+// checkFieldValueCompatibility (struct-literal field values) are the
+// compiler's own narrow, conservative COMPILE-TIME rejection of a
+// provably-wrong scalar/named/struct/variant value — distinct from
+// argProvenForParam's "proven" bit above, which only ever *skips* the
+// runtime check and never itself raises an error. These fire only when the
+// static type is fully known (single-alt spec, tracked ExprPrimInfo);
+// anything the compiler can't pin down is deferred to the runtime
+// enforceFuncArgTypes / opSetField checks instead.
+
+test "compiler: a direct call with a provably-wrong scalar argument type is a compile-time TypeError" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\func takeInt(a int) int { return a }
+        \\x := takeInt("hello")
+    );
+    try std.testing.expectEqual(error.TypeError, r.err);
+    try std.testing.expectEqualStrings("cannot pass string to parameter of type int; convert explicitly", r.msg);
+}
+
+test "compiler: passing an erased named-type value to a plain scalar parameter is a compile-time TypeError" {
+    // Meters is erased (int-based) — its own arithmetic still requires an
+    // explicit unwrap (see setCurrentExprPrimResult's erased-scalar checks),
+    // and checkDirectCallArgCompatibility enforces the same rule at a direct
+    // call site: arg_info.named_type is checked before arg_info.prim, so a
+    // named carrier is always rejected even though its underlying base
+    // matches.
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\type Meters int
+        \\func takeInt(a int) int { return a }
+        \\m := Meters(5)
+        \\x := takeInt(m)
+    );
+    try std.testing.expectEqual(error.TypeError, r.err);
+    try std.testing.expectEqualStrings("cannot pass Meters to parameter of type int; convert explicitly", r.msg);
+}
+
+test "compiler: passing the wrong specific named type to a named-typed parameter is a compile-time TypeError" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\type Meters int
+        \\type Feet int
+        \\func takeMeters(a Meters) Meters { return a }
+        \\f := Feet(5)
+        \\x := takeMeters(f)
+    );
+    try std.testing.expectEqual(error.TypeError, r.err);
+    try std.testing.expectEqualStrings("cannot pass Feet to parameter of type Meters", r.msg);
+}
+
+test "compiler: passing the wrong struct type to a struct-typed parameter is a compile-time TypeError" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\type A struct { v int }
+        \\type B struct { v int }
+        \\func takeA(a A) A { return a }
+        \\b := B{v:1}
+        \\x := takeA(b)
+    );
+    try std.testing.expectEqual(error.TypeError, r.err);
+    try std.testing.expectEqualStrings("cannot pass B to parameter of type A", r.msg);
+}
+
+test "compiler: passing the wrong variant type to a variant-typed parameter is a compile-time TypeError" {
+    // The value's variant_type is only tracked on a LOCAL binding (a
+    // top-level `:=` global has no variant-type tracking table — unlike the
+    // named/struct cases above, which do — see inferred_named_global_*/
+    // inferred_struct_global_* vs. the absence of an inferred_variant_global
+    // equivalent), so this needs the assignment inside a function body.
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\type Shape variant { circle(float), square(float) }
+        \\type Color variant { name(string) }
+        \\func takeShape(s Shape) Shape { return s }
+        \\func bad() Shape {
+        \\    c := Color.name("red")
+        \\    return takeShape(c)
+        \\}
+    );
+    try std.testing.expectEqual(error.TypeError, r.err);
+    try std.testing.expectEqualStrings("cannot pass Color to parameter of type Shape", r.msg);
+}
+
+// Regression: checkDirectCallArgCompatibility's scalar arm had no rune
+// exception, unlike its two siblings that handle the exact same
+// "rune value flowing into an int/float-shaped slot" situation:
+//   - checkFieldValueCompatibility (this file, below) explicitly special-
+//     cases `(alt.typ == .int or .float) and arg_p == .rune` before
+//     raising StructFieldTypeMismatch, with a comment explaining runtime
+//     parity requires it (vm_types.matchesTypeAlt's .int/.float arms are
+//     `v == .int or v == .rune` / `v == .float or v == .rune`).
+//   - argProvenForParam's own .int/.float arms explicitly accept
+//     `p == .rune` ("VM accepts rune in int context").
+// checkDirectCallArgCompatibility's .int/.float arm was missing that same
+// exception, so a call site the runtime would happily accept (and that
+// argProvenForParam already agreed was fine) was instead rejected at
+// compile time. Fixed by adding the identical exception.
+//
+// Rune literals are backtick-delimited (`` `A` ``, see
+// tests/spec/045_rune_literals.gengo) — single/double quotes both lex as
+// plain strings. The literal is passed directly (rather than through a
+// `:=` local) so its ExprPrimInfo.prim is actually tracked at the call
+// site: a plain "x := `A`" local's type_check stays `.none` (varDecl's
+// `:=` inference only tracks named/struct/variant results, not bare
+// prim kinds), so routing it through a local first would leave
+// arg_info.prim unset and never reach the fixed comparison at all.
+test "compiler: a rune argument is accepted by a direct call's int/float parameter, same as struct fields and proven args" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func takeInt(a int) int { return a }
+        \\func takeFloat(a float) float { return a }
+        \\func viaInt() int { return takeInt(`A`) }
+        \\func viaFloat() float { return takeFloat(`A`) }
+    );
+    // `A` is rune U+0041 = 65. Neither the int nor the float parameter
+    // forces an actual representation conversion -- the value stays
+    // .rune-tagged throughout (confirmed via std.core.type_of), matching
+    // matchesTypeAlt's accept-without-coerce semantics; only the compile-time
+    // TYPE CHECK is being tested here, not a numeric conversion.
+    try std.testing.expectEqual(@as(u21, 65), (try rt.callGlobal("viaInt", &.{})).rune);
+    try std.testing.expectEqual(@as(u21, 65), (try rt.callGlobal("viaFloat", &.{})).rune);
+}
+
+test "compiler: a provably-wrong scalar struct-field value is a compile-time StructFieldTypeMismatch" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\type Point struct { x int }
+        \\func mk() Point { return Point{x: "no"} }
+    );
+    try std.testing.expectEqual(error.StructFieldTypeMismatch, r.err);
+    try std.testing.expectEqualStrings("cannot assign string to field 'x' of type int; convert explicitly", r.msg);
+}
+
+test "compiler: assigning an erased named-type value to a plain scalar struct field is a compile-time StructFieldTypeMismatch" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\type Meters int
+        \\type Point struct { x int }
+        \\func mk() Point {
+        \\    m := Meters(5)
+        \\    return Point{x: m}
+        \\}
+    );
+    try std.testing.expectEqual(error.StructFieldTypeMismatch, r.err);
+    try std.testing.expectEqualStrings("cannot assign Meters to field 'x' of type int; convert explicitly", r.msg);
+}
+
+test "compiler: assigning the wrong specific named type to a named-typed struct field is a compile-time StructFieldTypeMismatch" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\type Meters int
+        \\type Feet int
+        \\type Distance struct { d Meters }
+        \\func mk() Distance {
+        \\    f := Feet(5)
+        \\    return Distance{d: f}
+        \\}
+    );
+    try std.testing.expectEqual(error.StructFieldTypeMismatch, r.err);
+    try std.testing.expectEqualStrings("cannot assign Feet to field 'd' of type Meters", r.msg);
+}
+
+test "compiler: assigning the wrong struct type to a struct-typed struct field is a compile-time StructFieldTypeMismatch" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\type A struct { v int }
+        \\type B struct { v int }
+        \\type Wrap struct { inner A }
+        \\func mk() Wrap {
+        \\    b := B{v:1}
+        \\    return Wrap{inner: b}
+        \\}
+    );
+    try std.testing.expectEqual(error.StructFieldTypeMismatch, r.err);
+    try std.testing.expectEqualStrings("cannot assign B to field 'inner' of type A", r.msg);
+}
+
+test "compiler: assigning the wrong variant type to a variant-typed struct field is a compile-time StructFieldTypeMismatch" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\type Shape variant { circle(float) }
+        \\type Color variant { name(string) }
+        \\type Wrap struct { s Shape }
+        \\func mk() Wrap {
+        \\    c := Color.name("red")
+        \\    return Wrap{s: c}
+        \\}
+    );
+    try std.testing.expectEqual(error.StructFieldTypeMismatch, r.err);
+    try std.testing.expectEqualStrings("cannot assign Color to field 's' of type Shape", r.msg);
+}
+
+test "compiler: a rune value assigned to an int-typed struct field is accepted (checkFieldValueCompatibility's rune exception)" {
+    // Contrast with the BUG test above: this exact "rune into an int-shaped
+    // slot" situation IS handled correctly here, because
+    // checkFieldValueCompatibility has the rune exception that
+    // checkDirectCallArgCompatibility is missing. The rune literal is
+    // written directly as the field value (see the BUG test's note on why a
+    // `:=` local wouldn't keep its prim tracked) so arg_info.prim is
+    // actually `.rune` when checkFieldValueCompatibility runs.
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Point struct { x int }
+        \\func mk() Point {
+        \\    return Point{x: `A`}
+        \\}
+    );
 }
 
 // ── Native-lane return-proof stamping (returns_proven) ──────────────────────
@@ -4479,6 +4920,30 @@ test "compiler: __eq__ drives == and != for a struct" {
     try std.testing.expect((try rt.callGlobal("eq", &.{})).boolean);
     try std.testing.expect((try rt.callGlobal("neq", &.{})).boolean);
     try std.testing.expect(!(try rt.callGlobal("eqFalse", &.{})).boolean);
+}
+
+test "compiler: struct dunder __mul__ and __div__ compute correctly" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Vec2 struct { x float, y float }
+        \\func (a Vec2) __mul__(b Vec2) Vec2 { return Vec2 { x: a.x * b.x, y: a.y * b.y } }
+        \\func (a Vec2) __div__(b Vec2) Vec2 { return Vec2 { x: a.x / b.x, y: a.y / b.y } }
+        \\func mulX() float {
+        \\    a := Vec2 { x: 2.0, y: 3.0 }
+        \\    b := Vec2 { x: 4.0, y: 5.0 }
+        \\    return (a * b).x
+        \\}
+        \\func divX() float {
+        \\    a := Vec2 { x: 10.0, y: 6.0 }
+        \\    b := Vec2 { x: 2.0, y: 3.0 }
+        \\    return (a / b).x
+        \\}
+    );
+    const rmul = try rt.callGlobal("mulX", &.{});
+    try std.testing.expectApproxEqAbs(@as(f64, 8.0), rmul.float, 1e-9);
+    const rdiv = try rt.callGlobal("divX", &.{});
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), rdiv.float, 1e-9);
 }
 
 test "compiler: declaring a dunder that conflicts with an already-working built-in operator is a compile error" {
@@ -8922,6 +9387,36 @@ test "compiler error recovery: error in one function body does not suppress erro
     try std.testing.expectEqual(@as(u8, 2), r.count);
 }
 
+test "compiler error recovery: a fatal error (TooManyLocals) aborts immediately without collecting further independent errors" {
+    // isFatalError (compiler.zig) returns OOM/TooMany* errors straight out of
+    // compile()'s top-level catch, bypassing collectError entirely — unlike
+    // every recoverable-error test above (AssignToConst, DuplicateNamedType,
+    // TypeError), which log-and-continue via syncToNextDecl. A fatal error
+    // must therefore leave collected_error_count at 0 even though a second,
+    // wholly independent recoverable error follows it in the source.
+    var rt = try setup();
+    defer rt.deinit();
+
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func manyLocals() int {\n");
+    var i: u32 = 0;
+    var buf: [32]u8 = undefined;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        const line = try std.fmt.bufPrint(&buf, "    v{d} := 0\n", .{i});
+        try src.appendSlice(std.testing.allocator, line);
+    }
+    try src.appendSlice(std.testing.allocator, "    return v0\n}\n");
+    // Never reached: the fatal error above aborts the whole compile() loop.
+    try src.appendSlice(std.testing.allocator, "const zz = 1\nzz = 2\n");
+
+    const multi = compileAndInspectMulti(&rt, src.items);
+    try std.testing.expectEqual(@as(u8, 0), multi.count);
+
+    const single = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyLocals, single.err);
+}
+
 test "compiler: std.fmt.format raises no crash on an absurdly long width/precision field" {
     var rt = try setup();
     defer rt.deinit();
@@ -9862,4 +10357,1112 @@ test "compiler: std.string.repeat rejects a negative count and a count exceeding
     );
     try std.testing.expectError(error.RangeError, rt.callGlobal("repeatNeg", &.{}));
     try std.testing.expectError(error.RangeError, rt.callGlobal("repeatHuge", &.{}));
+}
+
+// ── compiler_decls.zig coverage sweep (2026-08-24) ──────────────────────────
+//
+// tests/spec/fail/*.gengo (run via chaos_spec_test.zig, also counted in
+// tools/coverage.sh's kcov numbers) already exercises the overwhelming
+// majority of declaration-level error paths in compiler_decls.zig —
+// duplicate names across every declaration kind, self-referential structs,
+// subtype parent eligibility, generic function arg-count/constraint
+// violations, interface method type mismatches, etc. The tests below target
+// specifically what that sweep does NOT reach: the compile-time constant
+// arithmetic evaluator's operator paths (only ever exercised there with a
+// bare integer literal), generic struct/variant instantiation arg-count
+// errors (only a generic FUNC has a fixture), named-error-type and task-type
+// declaration conflict checks (no fixture exercises either at all), and a
+// few interface/method declaration error paths with no fixture of their own
+// (DuplicateInterfaceType, a truly-undeclared method receiver, a bracketed
+// receiver on a non-generic type).
+
+test "compiler: compile-time-const range bounds evaluate full arithmetic (+, -, *, **, div, rem, mod, unary minus, parens)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type A int range -5+2..10-3
+        \\type B int range 2*3..2**4
+        \\type C int range 10 div 4..10 rem 4 + 10 mod 4
+        \\type D int range (1+2)*3..(10-2)*2
+        \\func mkA(x int) A { return A(x) }
+        \\func mkB(x int) B { return B(x) }
+        \\func mkC(x int) C { return C(x) }
+        \\func mkD(x int) D { return D(x) }
+    );
+    // A: -3..7
+    _ = try rt.callGlobal("mkA", &.{.{ .int = -3 }});
+    _ = try rt.callGlobal("mkA", &.{.{ .int = 7 }});
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mkA", &.{.{ .int = -4 }}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mkA", &.{.{ .int = 8 }}));
+    // B: 6..16
+    _ = try rt.callGlobal("mkB", &.{.{ .int = 6 }});
+    _ = try rt.callGlobal("mkB", &.{.{ .int = 16 }});
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mkB", &.{.{ .int = 5 }}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mkB", &.{.{ .int = 17 }}));
+    // C: 10 div 4 = 2 .. 10 rem 4 + 10 mod 4 = 2 + 2 = 4
+    _ = try rt.callGlobal("mkC", &.{.{ .int = 2 }});
+    _ = try rt.callGlobal("mkC", &.{.{ .int = 4 }});
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mkC", &.{.{ .int = 1 }}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mkC", &.{.{ .int = 5 }}));
+    // D: (1+2)*3=9 .. (10-2)*2=16
+    _ = try rt.callGlobal("mkD", &.{.{ .int = 9 }});
+    _ = try rt.callGlobal("mkD", &.{.{ .int = 16 }});
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mkD", &.{.{ .int = 8 }}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mkD", &.{.{ .int = 17 }}));
+}
+
+test "compiler: compile-time-const range bounds support float division" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type E float range 1/4..3/4
+        \\func mkE(x float) E { return E(x) }
+    );
+    _ = try rt.callGlobal("mkE", &.{.{ .float = 0.25 }});
+    _ = try rt.callGlobal("mkE", &.{.{ .float = 0.75 }});
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mkE", &.{.{ .float = 0.2 }}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mkE", &.{.{ .float = 0.8 }}));
+}
+
+// Regression: parseConstProduct's "division by zero" guard (`if (rhs == 0)
+// return null`) used to run unconditionally before the operator switch, so
+// it also rejected `*` and `**` whenever the right operand happened to
+// literally be 0 — even though `x * 0` and `x ** 0` are perfectly
+// well-defined and involve no division. The compiler misdiagnosed these as
+// "not a compile-time constant expression" (error.CompileTimeConstant)
+// instead of evaluating them to 0 / 1 respectively. Fixed to only apply the
+// zero-check to the division-family operators (/, div, rem, mod).
+test "compiler: compile-time-const '*' and '**' evaluate correctly with a literal-0 right operand" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type X int range 0..(5*0)
+        \\type Y int range 0..(2**0)
+        \\func mkX(x int) X { return X(x) }
+        \\func mkY(y int) Y { return Y(y) }
+    );
+    // 5*0 == 0, so X's range is 0..0.
+    _ = try rt.callGlobal("mkX", &.{.{ .int = 0 }});
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mkX", &.{.{ .int = 1 }}));
+    // 2**0 == 1, so Y's range is 0..1.
+    _ = try rt.callGlobal("mkY", &.{.{ .int = 1 }});
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mkY", &.{.{ .int = 2 }}));
+
+    // Division-family operators must still correctly reject a literal-0
+    // divisor as non-constant.
+    try std.testing.expectError(error.CompileTimeConstant, compile(&rt,
+        \\type Z int range 0..(5/0)
+    ));
+}
+
+test "compiler: an unclosed paren in a compile-time-const range expression is reported as a non-constant expression" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.CompileTimeConstant, compile(&rt,
+        \\type X int range (5..10
+    ));
+}
+
+test "compiler: a string or boolean literal used where a compile-time-const range bound must be numeric is rejected" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.CompileTimeConstant, compile(&rt,
+        \\type X int range "lo".."hi"
+    ));
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try std.testing.expectError(error.CompileTimeConstant, compile(&rt2,
+        \\type Y int range true..10
+    ));
+}
+
+test "compiler: a previously declared top-level const can be used as a compile-time constant in a range bound" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\const MAX = 100
+        \\type Score int range 0..MAX
+        \\func mk(x int) Score { return Score(x) }
+    );
+    _ = try rt.callGlobal("mk", &.{.{ .int = 100 }});
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mk", &.{.{ .int = 101 }}));
+}
+
+// ── Generic struct/variant instantiation arg-count errors ───────────────────
+// tests/spec/fail/264 covers wrong arg count for a generic FUNC; nothing
+// exercises parseInstArgSpecs' identical checks when the generic being
+// instantiated is a struct or variant TYPE (applyGenericInst /
+// instantiateGenericType in compiler_decls.zig).
+
+test "compiler: too many type arguments for a generic struct instantiation is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.WrongTypeArgCount, compile(&rt,
+        \\type Box[T] struct { val T }
+        \\func f() int { b := Box[int, string]{ val: 1 }; return b.val }
+    ));
+}
+
+test "compiler: too few type arguments for a generic struct instantiation is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.WrongTypeArgCount, compile(&rt,
+        \\type Box[T] struct { val T }
+        \\func f() int { b := Box[]{ val: 1 }; return b.val }
+    ));
+}
+
+// Exercises applyGenericInst's variant_t branch (substituteSpec over both a
+// single-payload arm's payload_type and a record arm's fields) — no
+// existing test instantiates a generic variant type at all.
+test "compiler: generic variant instantiation substitutes both a single-payload arm and a record arm" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Box[T] variant {
+        \\    some(v T),
+        \\    none,
+        \\}
+        \\type Wrapped[T] variant {
+        \\    boxed { val T },
+        \\    empty,
+        \\}
+        \\func f() int {
+        \\    b := Box[int].some(42)
+        \\    switch b {
+        \\        case .some { return 1 }
+        \\        case .none { return 0 }
+        \\    }
+        \\}
+        \\func g() int {
+        \\    w := Wrapped[int].boxed { val: 7 }
+        \\    switch w {
+        \\        case .boxed { return w.val }
+        \\        case .empty { return 0 }
+        \\    }
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 1), (try rt.callGlobal("f", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 7), (try rt.callGlobal("g", &.{})).int);
+}
+
+// ── Named error type declaration conflicts ───────────────────────────────────
+// No existing fixture or test exercises namedErrorTypeDecl's own duplicate/
+// conflict checks at all.
+
+test "compiler: duplicate named error type declaration is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateNamedType, compile(&rt,
+        \\type MyErr error
+        \\type MyErr error
+    ));
+}
+
+test "compiler: a named error type name colliding with an existing struct type is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateNamedType, compile(&rt,
+        \\type Foo struct { x int }
+        \\type Foo error
+    ));
+}
+
+test "compiler: a named error type name colliding with an existing function is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateField, compile(&rt,
+        \\func Foo() int { return 1 }
+        \\type Foo error
+    ));
+}
+
+// ── Task type declaration conflicts ──────────────────────────────────────────
+// No existing fixture or test exercises taskDeclBody's own duplicate/
+// conflict checks (as opposed to task runtime semantics, well covered
+// elsewhere via task_state.zig's own 98% coverage).
+
+test "compiler: duplicate task type declaration is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateTaskType, compile(&rt,
+        \\type Worker task func() {}
+        \\type Worker task func() {}
+    ));
+}
+
+test "compiler: a task type name colliding with an existing struct type is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateTaskType, compile(&rt,
+        \\type Foo struct { x int }
+        \\type Foo task func() {}
+    ));
+}
+
+test "compiler: a task type name colliding with an existing function is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateField, compile(&rt,
+        \\func Foo() int { return 1 }
+        \\type Foo task func() {}
+    ));
+}
+
+// ── Interface/method declaration error paths with no fixture of their own ──
+
+test "compiler: duplicate interface type name is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateInterfaceType, compile(&rt,
+        \\type Shape interface { area() int }
+        \\type Shape interface { area() int }
+    ));
+}
+
+test "compiler: an interface method parameter list rejects a non-type token where a type annotation is expected" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.ExpectedTypeAnnotation, compile(&rt,
+        \\type Shape interface { area(123) int }
+    ));
+}
+
+test "compiler: a method receiver naming a wholly undeclared type is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnknownReceiverType, compile(&rt,
+        \\func (s Ghost) foo() int { return 1 }
+    ));
+}
+
+test "compiler: a bracketed method receiver on a non-generic type is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnexpectedToken, compile(&rt,
+        \\type Point struct { x int }
+        \\func (p Point[T]) foo() int { return 1 }
+    ));
+}
+
+// ── Struct field self-reference through a map (only [] and ? were covered) ──
+
+test "compiler: a struct can reference its own type through a map value, same as array or optional" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Node struct {
+        \\    value int,
+        \\    children map[string]Node,
+        \\}
+        \\func f() int {
+        \\    leaf := Node{ value: 10, children: {} }
+        \\    root := Node{ value: 1, children: {"a": leaf} }
+        \\    return root.children["a"].value
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 10), (try rt.callGlobal("f", &.{})).int);
+}
+
+// ── vm.zig coverage sweep (2026-08-24) ──────────────────────────────────────
+// Black-box additions targeting src/lang/vm.zig's own uncovered opcode
+// branches (dispatch loop + opcode handlers), via Runtime.run()/callGlobal()
+// only -- vm.zig itself is not touched. See the tests above this section
+// header for existing arithmetic-overflow coverage (int add/sub/mul/negation/
+// int_div/mod at i64::MIN); the tests below fill specific branches that
+// audit found still uncovered rather than re-testing the common cases.
+
+// getShiftArgs (vm.zig) has two branches no existing test hits: a negative
+// shift count (bn < 0) raises RangeError outright, and a shift count >= 64
+// is clamped to 63 (`@min(bn, 63)`) rather than passed through to a raw
+// shift -- which would be undefined behavior in Zig for a shift-amount
+// operand that meets or exceeds the operand's bit width. Using a
+// zero/negative-one base keeps the clamped shift itself overflow-free so
+// this isolates the clamp behavior from the separate signed-overflow guard
+// tested elsewhere.
+test "compiler: shift by a negative count raises RangeError; a count >= 64 clamps to 63 instead of invoking UB" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func shl(a int, n int) int { return a << n }
+        \\func shr(a int, n int) int { return a >> n }
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("shl", &.{ .{ .int = 1 }, .{ .int = -1 } }));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("shr", &.{ .{ .int = 1 }, .{ .int = -1 } }));
+    // 0 << (anything, clamped to 63) == 0.
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("shl", &.{ .{ .int = 0 }, .{ .int = 100 } })).int);
+    // -1 >> 63 (arithmetic shift right) == -1: sign bit fills every position.
+    try std.testing.expectEqual(@as(i64, -1), (try rt.callGlobal("shr", &.{ .{ .int = -1 }, .{ .int = 500 } })).int);
+    // 1 >> 63 (clamped) == 0.
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("shr", &.{ .{ .int = 1 }, .{ .int = 9999 } })).int);
+}
+
+// The '**' operator (Op.pow) itself has no direct test anywhere -- only
+// std.math.pow (a different, unrelated std-level function) is exercised.
+// Covers: plain int**int (result stays int, computed via f64 std.math.pow
+// then floatToIntSafe), plain float**float, bigint**int and int**bigint
+// (both routed through the isBigInt fast path with a.a_big/b conversion),
+// and bigint's explicit negative-exponent rejection (TypeError, not
+// RangeError -- read directly from vm.zig's .pow handler). Also covers a
+// subtle plain-int edge case: 2**-1 mathematically is 0.5 -- makeNumeric's
+// floatToIntSafe (safeI64FromFloat) does NOT reject this as a non-integral
+// result; it @truncs first and only round-trip-checks the TRUNCATED value
+// (0.0) against itself, which trivially matches. So "int ** negative int"
+// silently truncates towards zero (0.5 -> 0) exactly like an explicit
+// int(0.5) cast would, rather than erroring -- confirmed by reading
+// safeI64FromFloat directly (common.zig), not assumed.
+test "compiler: ** (pow) operator covers int/int, float/float, bigint operands, and negative-exponent edge cases" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func powIntInt() int { return 2 ** 10 }
+        \\func powFloatFloat() float { return 2.0 ** 0.5 }
+        \\func powIntNegExp() int { return 2 ** -1 }
+        \\func powBigIntIntStr() string { return string(bigint(2) ** 10) }
+        \\func powIntBigIntStr() string { return string(2 ** bigint(3)) }
+        \\func powBigIntNegExp() bigint { return bigint(2) ** -1 }
+    );
+    try std.testing.expectEqual(@as(i64, 1024), (try rt.callGlobal("powIntInt", &.{})).int);
+    try std.testing.expectApproxEqAbs(@as(f64, std.math.sqrt2), (try rt.callGlobal("powFloatFloat", &.{})).float, 1e-9);
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("powIntNegExp", &.{})).int);
+    try std.testing.expectEqualStrings("1024", try vms.asStringValue(try rt.callGlobal("powBigIntIntStr", &.{})));
+    try std.testing.expectEqualStrings("8", try vms.asStringValue(try rt.callGlobal("powIntBigIntStr", &.{})));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("powBigIntNegExp", &.{}));
+}
+
+// bit_and/bit_or/bit_xor/bit_not on plain (non-named) ints are only ever
+// checked for their nominal-type-preservation behavior (see "named bitwise
+// result retains and validates nominal type" above) -- no test verifies the
+// actual computed values of these four opcodes on plain ints.
+test "compiler: bitwise &, |, ^, ~ on plain ints compute correct values" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func bAnd(a int, b int) int { return a & b }
+        \\func bOr(a int, b int) int { return a | b }
+        \\func bXor(a int, b int) int { return a ^ b }
+        \\func bNot(a int) int { return ~a }
+    );
+    try std.testing.expectEqual(@as(i64, 0b1000), (try rt.callGlobal("bAnd", &.{ .{ .int = 0b1100 }, .{ .int = 0b1010 } })).int);
+    try std.testing.expectEqual(@as(i64, 0b1110), (try rt.callGlobal("bOr", &.{ .{ .int = 0b1100 }, .{ .int = 0b1010 } })).int);
+    try std.testing.expectEqual(@as(i64, 0b0110), (try rt.callGlobal("bXor", &.{ .{ .int = 0b1100 }, .{ .int = 0b1010 } })).int);
+    try std.testing.expectEqual(@as(i64, -1), (try rt.callGlobal("bNot", &.{.{ .int = 0 }})).int);
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("bNot", &.{.{ .int = -1 }})).int);
+}
+
+// compareNumericPair (backs the general/float path of .gt/.lt/.le/.ge)
+// explicitly rejects non-finite floats with TypeError -- but .eq/.ne never
+// route through compareNumericPair at all for two plain floats; they fall
+// straight to Value.equals, which does a bare IEEE `==`. This is an
+// intentional asymmetry (found by reading both opcode handlers side by
+// side), not a bug: ordering a NaN is nonsensical so it's rejected, but
+// structural equality is always well-defined (NaN == NaN is simply false,
+// same as Zig/most languages' `==`).
+test "compiler: comparing NaN with <,>,<=,>= raises TypeError, but == and != fall back to plain IEEE equality (an intentional asymmetry)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func ltNan() bool { return std.math.nan() < 1.0 }
+        \\func gtNan() bool { return std.math.nan() > 1.0 }
+        \\func leNan() bool { return std.math.nan() <= std.math.nan() }
+        \\func geNan() bool { return std.math.nan() >= std.math.nan() }
+        \\func eqNan() bool { return std.math.nan() == std.math.nan() }
+        \\func neNan() bool { return std.math.nan() != std.math.nan() }
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("ltNan", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("gtNan", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("leNan", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("geNan", &.{}));
+    try std.testing.expect(!(try rt.callGlobal("eqNan", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("neNan", &.{})).boolean);
+}
+
+// tryStructDunderBinary/tryStructDunderUnary's runtime fallback (used when
+// the operand's static type is erased, e.g. inside a type-erased generic
+// function body -- see "dunder operators work at runtime inside a
+// type-erased generic function body" above, which only exercises the
+// __compare__/'>' path). This covers the SAME runtime-fallback mechanism
+// for every other dunder it drives: __add__, __sub__, __mul__, __div__,
+// __rem__, __eq__/__ne__ (via the same __eq__ dunder, one negated), and
+// __neg__ -- none of which were exercised at this layer before, only via
+// the compile-time desugar (a + b -> a.__add__(b), which never touches
+// tryStructDunderBinary since the desugar fires only when the operand's
+// static struct/named type is known at compile time).
+test "compiler: every struct dunder operator's runtime fallback (tryStructDunderBinary/Unary) works inside a type-erased generic function body" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Box struct { v int }
+        \\func (a Box) __add__(b Box) Box { return Box{v: a.v + b.v} }
+        \\func (a Box) __sub__(b Box) Box { return Box{v: a.v - b.v} }
+        \\func (a Box) __mul__(b Box) Box { return Box{v: a.v * b.v} }
+        \\func (a Box) __div__(b Box) Box { return Box{v: a.v div b.v} }
+        \\func (a Box) __rem__(b Box) Box { return Box{v: a.v rem b.v} }
+        \\func (a Box) __eq__(b Box) bool { return a.v == b.v }
+        \\func (a Box) __neg__() Box { return Box{v: -a.v} }
+        \\
+        \\func addG[T comparable](a T, b T) T { return a + b }
+        \\func subG[T comparable](a T, b T) T { return a - b }
+        \\func mulG[T comparable](a T, b T) T { return a * b }
+        \\func divG[T comparable](a T, b T) T { return a / b }
+        \\func remG[T comparable](a T, b T) T { return a rem b }
+        \\func eqG[T comparable](a T, b T) bool { return a == b }
+        \\func neqG[T comparable](a T, b T) bool { return a != b }
+        \\func negG[T comparable](a T) T { return -a }
+        \\
+        \\func callAdd() int { return addG[Box](Box{v:12}, Box{v:3}).v }
+        \\func callSub() int { return subG[Box](Box{v:12}, Box{v:3}).v }
+        \\func callMul() int { return mulG[Box](Box{v:12}, Box{v:3}).v }
+        \\func callDiv() int { return divG[Box](Box{v:12}, Box{v:3}).v }
+        \\func callRem() int { return remG[Box](Box{v:13}, Box{v:5}).v }
+        \\func callEq() bool { return eqG[Box](Box{v:3}, Box{v:3}) }
+        \\func callNeq() bool { return neqG[Box](Box{v:3}, Box{v:4}) }
+        \\func callNeg() int { return negG[Box](Box{v:7}).v }
+    );
+    try std.testing.expectEqual(@as(i64, 15), (try rt.callGlobal("callAdd", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 9), (try rt.callGlobal("callSub", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 36), (try rt.callGlobal("callMul", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 4), (try rt.callGlobal("callDiv", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 3), (try rt.callGlobal("callRem", &.{})).int);
+    try std.testing.expect((try rt.callGlobal("callEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("callNeq", &.{})).boolean);
+    try std.testing.expectEqual(@as(i64, -7), (try rt.callGlobal("callNeg", &.{})).int);
+}
+
+// pushFieldFromObject's array branch (.first/.last) handles all four array
+// object representations uniformly (.array, .array_managed, .array_view,
+// .array_capacity) -- but no existing test exercises .first/.last at all,
+// on any representation. Covers a plain array literal (.array_managed), a
+// slice expression's result (.array_view), and a post-append array
+// (.array_capacity, which only exists after std.core.append reallocates
+// into spare backing capacity) -- plus the empty-array IndexOutOfBounds
+// error path shared by all representations.
+test "compiler: array .first/.last field access works across every array representation, including the empty-array error path" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func firstManaged() int { arr := [10, 20, 30]; return arr.first }
+        \\func lastManaged() int { arr := [10, 20, 30]; return arr.last }
+        \\func firstView() int { arr := [10, 20, 30, 40]; view := arr[1:3]; return view.first }
+        \\func lastView() int { arr := [10, 20, 30, 40]; view := arr[1:3]; return view.last }
+        \\func firstCapacity() int {
+        \\    arr := []int{}
+        \\    arr = std.core.append(arr, 100)
+        \\    arr = std.core.append(arr, 200)
+        \\    return arr.first
+        \\}
+        \\func lastCapacity() int {
+        \\    arr := []int{}
+        \\    arr = std.core.append(arr, 100)
+        \\    arr = std.core.append(arr, 200)
+        \\    return arr.last
+        \\}
+        \\func firstEmpty() int { arr := []int{}; return arr.first }
+    );
+    try std.testing.expectEqual(@as(i64, 10), (try rt.callGlobal("firstManaged", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 30), (try rt.callGlobal("lastManaged", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 20), (try rt.callGlobal("firstView", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 30), (try rt.callGlobal("lastView", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 100), (try rt.callGlobal("firstCapacity", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 200), (try rt.callGlobal("lastCapacity", &.{})).int);
+    try std.testing.expectError(error.IndexOutOfBounds, rt.callGlobal("firstEmpty", &.{}));
+}
+
+// Closures/upvalues: a nested closure ('b') capturing a variable ('x') that
+// is itself only an UPVALUE of its immediately-enclosing closure ('a'), not
+// one of a's own locals -- a transitive/chained upvalue capture, distinct
+// from the already-well-covered "closure captures a local of its direct
+// enclosing function" case.
+test "compiler: a nested closure can capture its enclosing closure's own upvalue (transitive upvalue chain)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func makeNested() int {
+        \\    x := 100
+        \\    a := func() func() int {
+        \\        b := func() int {
+        \\            x = x + 1
+        \\            return x
+        \\        }
+        \\        return b
+        \\    }
+        \\    counter := a()
+        \\    r1 := counter()
+        \\    r2 := counter()
+        \\    return r1 * 1000 + r2
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 101102), (try rt.callGlobal("makeNested", &.{})).int);
+}
+
+// Closures outliving their defining function's stack frame, combined with a
+// heap compaction happening between closure creation and closure
+// invocation -- each makeAdder(i) call's frame is long gone by the time the
+// closures are actually called, and the intervening churn loop (with a
+// small heap) forces at least one real compaction, exercising whatever
+// path keeps a closure's captured cell(s) valid/relocated correctly across
+// GC (same general bug class as project memory's stale-slice-compaction
+// sweep, applied here specifically to closures/upvalue cells rather than
+// raw slices).
+test "compiler: closures survive heap compaction that happens between their creation and their invocation" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .heap_size_bytes = 128 * 1024,
+        .max_objects = 2048,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.run(
+        \\std := import("std")
+        \\func makeAdder(n int) func(int) int {
+        \\    return func(x int) int { return x + n }
+        \\}
+        \\adders := []
+        \\func buildAdders() {
+        \\    i := 0
+        \\    for i < 5 {
+        \\        adders = std.core.append(adders, makeAdder(i))
+        \\        i = i + 1
+        \\    }
+        \\}
+        \\buildAdders()
+        \\func churn() int {
+        \\    j := 0
+        \\    for j < 3000 {
+        \\        junk := "garbage-" + std.conv.to_string(j) + "-more-padding-here"
+        \\        _ = std.core.bytelen(junk)
+        \\        j = j + 1
+        \\    }
+        \\    total := 0
+        \\    k := 0
+        \\    for k < 5 {
+        \\        total = total + adders[k](100)
+        \\        k = k + 1
+        \\    }
+        \\    return total
+        \\}
+    ) == .ok);
+    const result = rt.call("churn", &.{});
+    switch (result) {
+        .ok => |v| try std.testing.expectEqual(@as(i64, 510), v.int),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+// InlineVariantValue packs a payload into 36 bits; an int payload outside
+// ±2^35 (per value.zig's doc comment) falls back to a heap-allocated
+// variant_value object instead. Same variant arm shape, same field-access
+// code path (opGetField, since the receiver here is a direct call result,
+// not a local -- see the BUG test just below for why that distinction
+// matters), exercised at both representations -- confirming the magnitude-
+// based representation switch doesn't silently corrupt or truncate the
+// payload at the boundary.
+test "compiler: a variant arm's int payload switches from inline to heap representation once it exceeds InlineVariantValue's 36-bit range" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Box variant {
+        \\    count(n int),
+        \\}
+        \\func makeSmall() Box { return Box.count(42) }
+        \\func makeBig() Box { return Box.count(999999999999) }
+        \\func smallInline() int { return makeSmall().n }
+        \\func bigHeap() int { return makeBig().n }
+    );
+    try std.testing.expectEqual(@as(i64, 42), (try rt.callGlobal("smallInline", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 999999999999), (try rt.callGlobal("bigHeap", &.{})).int);
+}
+
+// Regression: opGetLocalGetField (vm.zig, the get_local+get_field fusion
+// used when the field's receiver is a plain local variable/parameter)
+// checked only `raw == .object` for its inline-cache fast path and then
+// unconditionally required `vms.unboxNamed(raw) == .object`, erroring
+// TypeError otherwise -- it had no `.inline_variant` case at all. Its
+// non-fused sibling opGetField DOES handle `.inline_variant` explicitly
+// before requiring `.object`. The result: `x.fieldName` on a local variable
+// holding a small (inline-representable) variant payload raised TypeError,
+// while the exact same field access on a non-local receiver (e.g. a
+// function call's return value) or on a heap-represented (large-payload)
+// variant in a local both worked correctly. Fixed by adding the identical
+// `.inline_variant` case to opGetLocalGetField.
+test "compiler: dot-field access on an inline (small-payload) variant stored in a local variable works, same as a non-local receiver" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Box variant {
+        \\    count(n int),
+        \\}
+        \\func viaLocalSmall() int {
+        \\    b := Box.count(42)
+        \\    return b.n
+        \\}
+        \\func viaLocalBig() int {
+        \\    b := Box.count(999999999999)
+        \\    return b.n
+        \\}
+        \\func viaCallResult() int {
+        \\    return Box.count(7).n
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 42), (try rt.callGlobal("viaLocalSmall", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 999999999999), (try rt.callGlobal("viaLocalBig", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 7), (try rt.callGlobal("viaCallResult", &.{})).int);
+}
+
+// ── compiler_stmts.zig coverage sweep (2026-08-24) ──────────────────────────
+//
+// Targeted at statement-compilation branches in compiler_stmts.zig that were
+// under-exercised by both this file and the tests/spec(/fail) corpus (grepped
+// first to avoid duplicating existing coverage — e.g. NonExhaustiveSwitch,
+// DuplicateDefaultCase, struct-field type-mismatch-on-assign, const-field
+// writes, assert non-bool, and multi-assign path targets are all already
+// covered by tests/spec/fail/*.gengo and tests/spec/*.gengo, which contribute
+// to the same coverage run via chaos_spec_test.zig).
+//
+// Dead-code finding (reported, not "fixed" — see task instructions): reading
+// compiler_stmts.zig's stmt() dispatcher shows `isIndexAssign`/
+// `indexAssignStmt` (compiler_stmts.zig ~1156-1206) can never actually run.
+// The preceding branch,
+//   if ((ptt == .dot or ptt == .lbracket) and isPropertyAssign(c)) { ... }
+// already returns true for every input isIndexAssign would also accept: a
+// bare `ident[expr] = value` sets isPropertyAssign's `saw_path` on the very
+// first `[` token and returns true as soon as balanced-bracket depth hits 0
+// at a bare `.eq`, exactly the shape isIndexAssign requires. Since
+// isPropertyAssign is checked unconditionally first, isIndexAssign's own
+// check is never reached with a true result reachable only through the
+// first branch already having consumed it. No test added here can exercise
+// indexAssignStmt/isIndexAssign without the dispatcher itself changing —
+// doing so would require modifying stmt()'s control flow, out of scope for
+// a black-box coverage pass.
+
+test "compiler: 'case .arm_name' is rejected inside a '.type' switch scrutinee" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\func f(n int) string {
+        \\    switch n.type {
+        \\        case .bogus { return "x" }
+        \\    }
+        \\    return ""
+        \\}
+    );
+    try std.testing.expectEqual(error.UnexpectedToken, r.err);
+    try std.testing.expect(std.mem.indexOf(u8, r.msg, ".type") != null);
+}
+
+// findVariantForArms requires every seen arm name to exist on a candidate
+// variant type; an arm name that matches no registered variant leaves the
+// exhaustiveness check unable to identify a type to check against, so it's
+// silently skipped — no compile error, and the case simply never matches at
+// runtime (variant_check compares tag strings and "bogus" never equals any
+// real arm name). This documents that switchStmt does NOT validate `.arm`
+// names against the scrutinee's actual variant type at compile time.
+test "compiler: 'case .arm_name' for a name absent from every registered variant never matches, falling through to default" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Decision variant { allow, deny(string) }
+        \\func classify(d Decision) string {
+        \\    switch d {
+        \\        case .bogus { return "bogus" }
+        \\        default { return "fallback" }
+        \\    }
+        \\    return ""
+        \\}
+        \\func run() string { return classify(Decision.allow()) }
+    );
+    const result = try rt.callGlobal("run", &.{});
+    try std.testing.expectEqualStrings("fallback", try vms.asStringValue(result));
+}
+
+// Plain value switches (no variant-arm `.case` syntax involved) never run
+// the exhaustiveness check (seen_arm_count stays 0), so a switch with no
+// matching case and no default is a compile-clean runtime no-op: the
+// scrutinee is computed, compared against every case, and simply discarded
+// when nothing matches.
+test "compiler: a plain-value switch with no matching case and no default is a silent runtime no-op" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func classify(n int) int {
+        \\    result := 0
+        \\    switch n {
+        \\        case 1 { result = 100 }
+        \\        case 2 { result = 200 }
+        \\    }
+        \\    return result
+        \\}
+    );
+    const result = try rt.callGlobal("classify", &.{.{ .int = 3 }});
+    try std.testing.expectEqual(@as(i64, 0), result.int);
+}
+
+// switchStmt performs no duplicate-value detection across cases (unlike the
+// duplicate-arm exhaustiveness regression guard for variant switches) — the
+// first matching case's jif_pop chain always wins and later duplicate cases
+// are simply unreachable dead branches, not a compile error.
+test "compiler: duplicate case values in a plain switch compile fine; the first matching case wins" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func classify(n int) string {
+        \\    switch n {
+        \\        case 1 { return "first" }
+        \\        case 1 { return "second" }
+        \\        default { return "none" }
+        \\    }
+        \\    return ""
+        \\}
+    );
+    const result = try rt.callGlobal("classify", &.{.{ .int = 1 }});
+    try std.testing.expectEqualStrings("first", try vms.asStringValue(result));
+}
+
+test "compiler: 'defer' outside of a function is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DeferOutsideFunction, compile(&rt,
+        \\defer std.io.println("x")
+    ));
+}
+
+test "compiler: 'defer' of a bare non-call expression is rejected" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DeferRequiresCall, compile(&rt,
+        \\func f() {
+        \\    x := 1
+        \\    defer x
+        \\}
+    ));
+}
+
+// direct_named_method's global-name lookup and emitGetGlobal happen before
+// argument parsing, so a `TypeName.method(...)` deferred call with zero
+// arguments still compiles that far before hitting the "at least one
+// argument" check — this exercises that specific ordering.
+test "compiler: 'defer TypeName.method()' with no arguments is rejected (missing receiver)" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\type MyInt int
+        \\func (m MyInt) show() {}
+        \\func run() {
+        \\    defer MyInt.show()
+        \\}
+    );
+    try std.testing.expectEqual(error.ArityMismatch, r.err);
+    try std.testing.expect(std.mem.indexOf(u8, r.msg, "requires at least one argument") != null);
+}
+
+test "compiler: a malformed property name in a defer chain reports ExpectedPropertyName" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.ExpectedPropertyName, compile(&rt,
+        \\func f() {
+        \\    x := 1
+        \\    defer x.5
+        \\}
+    ));
+}
+
+// deferStmt's `kw_func => funcLit` branch: an immediately-invoked function
+// literal as the deferred call. Combined with a named return value, since
+// the design doc notes deferred closures observe/modify named returns via
+// upvalues before retSlowPath reads them.
+test "compiler: 'defer func() {...}()' (func-literal IIFE) runs at function exit and can mutate a named return" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() (result int) {
+        \\    result = 1
+        \\    defer func() { result = 99 }()
+        \\    return
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 99), result.int);
+}
+
+// deferStmt's `.lparen => { expr(); consume(rparen); }` branch: the callee
+// is an arbitrary parenthesized expression rather than a bare identifier.
+test "compiler: 'defer (expr)()' (parenthesized callee) runs at function exit" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() (result int) {
+        \\    result = 1
+        \\    adder := func() { result = 77 }
+        \\    defer (adder)()
+        \\    return
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 77), result.int);
+}
+
+// compileDeferBlock's body compiles like an ordinary function body (via
+// c.decl() in a loop), so `return` inside a `defer { ... }` block is
+// perfectly legal — it just ends the deferred closure's own execution
+// early, with no special interaction with the enclosing function's return.
+// Note a sharp edge found while writing this test: a BARE `return` (no
+// semicolon) immediately followed by another statement on the next physical
+// line is NOT safely "return, then unreachable code" here — Gengo has no
+// automatic semicolon insertion, so returnStmt's bare-return check
+// (`c.check(.rbrace/.eof/.semicolon)`) fails to recognize the return as
+// bare and instead parses the following identifier as its return
+// *expression* (`return result` swallows the next line's `result`), leaving
+// the trailing `= 999` as a syntax error reported against the token AFTER
+// it (parsePrecedence's prefix-rule miss advances first, then reports
+// against the new c.cur). An explicit `return;` avoids the trap.
+test "compiler: a 'defer { ... }' block may contain its own explicit 'return;', ending only the deferred closure" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() (result int) {
+        \\    result = 1
+        \\    defer {
+        \\        result = 55
+        \\        return;
+        \\        result = 999
+        \\    }
+        \\    return
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 55), result.int);
+}
+
+// LIFO order for defers stacked directly in straight-line code (not inside
+// a loop — loop-driven LIFO defer ordering is already covered by
+// tests/spec/208_break_with_defer.gengo). Each defer block appends a
+// distinct digit, so the resulting string reveals execution order
+// unambiguously: last-registered runs first.
+test "compiler: multiple stacked 'defer { ... }' statements in one function run in LIFO order" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() (result string) {
+        \\    defer { result = result + "3" }
+        \\    defer { result = result + "2" }
+        \\    defer { result = result + "1" }
+        \\    result = "0"
+        \\    return
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqualStrings("0123", try vms.asStringValue(result));
+}
+
+// multiBindStmt's is_decl path always calls defineLocal for every name in
+// the list with no pre-check for duplicates within that same list, so a
+// repeated name is caught only by defineLocal's own "duplicate local
+// binding" scan against locals already added earlier in the SAME loop.
+test "compiler: declaring the same name twice in one multi-bind list is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateLocal, compile(&rt,
+        \\func pair() (int, int) { return 1, 2 }
+        \\func g() int {
+        \\    a, a := pair()
+        \\    return a
+        \\}
+    ));
+}
+
+// Unlike Go's `:=`, which allows redeclaring an existing name in a
+// multi-value declaration as long as at least one name on the left is new,
+// Gengo's multiBindStmt unconditionally defineLocal()s every name — so
+// reusing an already-declared local in the SAME function scope is always a
+// DuplicateLocal compile error, never a "partial declare, partial assign".
+test "compiler: multi-bind ':=' has no Go-style partial-redeclare — reusing an existing local is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateLocal, compile(&rt,
+        \\func pair() (int, int) { return 1, 2 }
+        \\func g() int {
+        \\    a := 1
+        \\    a, b := pair()
+        \\    return a + b
+        \\}
+    ));
+}
+
+// emitAssignTargetPath's step_count==0 (bare-variable) branch and its
+// dot_name-step branch, exercised together in the SAME multi-assign
+// statement — tests/spec/031_multi_assign_paths.gengo and
+// 050_weird_multi_assign_unicode_paths.gengo only exercise all-path target
+// lists, never a bare variable mixed with a property-access target.
+test "compiler: multi-assign mixes a bare-variable target with a property-access target" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Box struct { v int }
+        \\func f() int {
+        \\    a := 0
+        \\    b := Box{v: 0}
+        \\    a, b.v = 5, 9
+        \\    return a + b.v
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 14), result.int);
+}
+
+test "compiler: multi-assign mixes a bare-variable target with an index target" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() int {
+        \\    a := 0
+        \\    arr := [0, 0, 0]
+        \\    a, arr[1] = 7, 8
+        \\    return a + arr[1]
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 15), result.int);
+}
+
+// parseAssignTargetList's own bounds check on a bracket-index literal
+// (guarding emitAssignTargetPath's later raw @intFromFloat) — mirrors the
+// exact `a[1e300], b = x, y` scenario named in that function's doc comment.
+test "compiler: an out-of-range array index literal in a multi-assign target list is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.BadNumber, compile(&rt,
+        \\func f() {
+        \\    arr := [1, 2, 3]
+        \\    b := 0
+        \\    arr[1e300], b = 1, 2
+        \\}
+    ));
+}
+
+// op_trap_check: the multi-bind `trap` slot panics with TrapFired only when
+// its value is non-null; a null value passes through silently. Verified
+// both ways in one test (the fail-path alone is already covered by
+// tests/spec/fail/079_trap_fires.gengo).
+test "compiler: multi-bind 'trap' slot passes through null silently and panics only on a non-null value" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func mayFail(fail bool) (?any, ?error) {
+        \\    if fail { return null, std.core.error("boom") }
+        \\    return 42, null
+        \\}
+        \\func ok() any {
+        \\    val, trap := mayFail(false)
+        \\    return val
+        \\}
+        \\func bad() any {
+        \\    val, trap := mayFail(true)
+        \\    return val
+        \\}
+    );
+    const ok_result = try rt.callGlobal("ok", &.{});
+    try std.testing.expectEqual(@as(i64, 42), ok_result.int);
+    try std.testing.expectError(error.TrapFired, rt.callGlobal("bad", &.{}));
+}
+
+// checkStaticFieldAssignTarget's UnknownStructField branch, reached only
+// through a direct `root.field = value` assignment statement (propertyAssignStmt) —
+// distinct from the existing tests/spec/fail cases, which hit UnknownStructField
+// via a struct-literal's unknown key (004) or a plain field READ (010), never
+// an assignment STATEMENT's own static check.
+test "compiler: assigning to a nonexistent struct field is a compile-time error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnknownStructField, compile(&rt,
+        \\type Point struct { x int, y int }
+        \\func f() int {
+        \\    p := Point{x: 1, y: 2}
+        \\    p.z = 5
+        \\    return p.x
+        \\}
+    ));
+}
+
+// checkStaticFieldAssignTarget only resolves a direct `root.field` target
+// (steps_seen == 0); any chain longer than one dot falls back to the
+// runtime-only get_field/set_field path with no compile-time field
+// validation at all. Exercises both the plain '=' and compound '+='
+// dot_name branches of propertyAssignStmt through a two-level chain.
+test "compiler: a multi-level property chain (a.b.c) assigns and compound-assigns via the runtime-only path" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Inner struct { c int }
+        \\type Outer struct { b Inner }
+        \\func f() int {
+        \\    o := Outer{b: Inner{c: 1}}
+        \\    o.b.c = 99
+        \\    o.b.c += 1
+        \\    return o.b.c
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 100), result.int);
+}
+
+// cForStmt: all three clauses omitted — `c.match(.semicolon)` (init),
+// `!c.match(.semicolon)` (cond), and `!c.check(.lbrace)` (post) all take
+// their "omitted" branch. An infinite loop, terminated only by `break`.
+test "compiler: C-style for loop with all three clauses omitted runs until 'break'" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() int {
+        \\    n := 0
+        \\    for ;; {
+        \\        n++
+        \\        if n == 5 { break }
+        \\    }
+        \\    return n
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 5), result.int);
+}
+
+// cForStmt: only the condition clause is present — init and post both
+// omitted (post-omission taking the `!c.check(.lbrace)` false branch, the
+// only combination among the new for-loop tests here where the loop body
+// itself must perform the increment).
+test "compiler: C-style for loop with only the condition clause present (init and post omitted)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() int {
+        \\    i := 0
+        \\    for ; i < 5 ; {
+        \\        i++
+        \\    }
+        \\    return i
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 5), result.int);
+}
+
+// cForStmt: init clause present (registering a loop-var slot via
+// loop_var_name), condition and post both omitted.
+test "compiler: C-style for loop with init present, condition and post both omitted" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() int {
+        \\    n := 0
+        \\    for i := 0;; {
+        \\        n++
+        \\        if n == 3 { break }
+        \\    }
+        \\    return n
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 3), result.int);
 }
