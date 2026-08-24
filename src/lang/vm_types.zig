@@ -695,7 +695,14 @@ pub fn applyNamedTypeFn(ctx: VMContext, typ_obj: *Object, kind: @import("value.z
     const n = try vms.valueAsNumber(inner);
     const delta: f64 = if (kind == .succ) 1.0 else -1.0;
     const result = n + delta;
-    if (result == n) {
+    // `result == n` alone doesn't catch a NaN input: NaN+delta is still NaN,
+    // and NaN == NaN is false under IEEE 754, so this check never fired for
+    // NaN and it fell through to the range/cycle/clamp branches below —
+    // all of which also compare false against NaN in both directions, so a
+    // NaN argument silently produced NaN as if it were a valid instance of
+    // the range-constrained type. wrapCycleValue/clampValue both already
+    // guard against this explicitly; the plain-range path needs the same.
+    if (result == n or !std.math.isFinite(result)) {
         ctx.vs.setRuntimeErr("cannot increment non-finite or very large value", .{});
         announcePanicMsg(ctx);
         return error.RangeError;

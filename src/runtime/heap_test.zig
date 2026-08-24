@@ -553,3 +553,425 @@ test "compactManagedHeap never corrupts permanent data even with heavy bump() pr
     try std.testing.expectEqualStrings("beta", typ_obj.struct_type.fields[1].name);
     try std.testing.expectEqualStrings("gamma", typ_obj.struct_type.fields[2].name);
 }
+
+// ── Compaction: additional object tags ────────────────────────────────────
+//
+// The tests above only exercise compactManagedHeap()'s dyn_string path.
+// compactFillBlocks/compactCountBlocks/compactUpdateObj switch on many more
+// ObjTags; these tests drive each of the remaining owning-block tags through
+// a real relocation (via an interspersed, then-freed, spacer block so the
+// live block's address actually changes) and confirm the data read back
+// through the object's updated slice is byte-for-byte correct.
+
+test "compactManagedHeap relocates array_managed, map, map_managed, and map_hashed blocks" {
+    var h: heap.State = .{};
+    try h.init(4096, 32, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    const spacer_a = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    const o_arr = heap.allocObject() orelse return error.TestFailed;
+    const arr = heap.g_state.allocManagedSlice(Value, 4) orelse return error.TestFailed;
+    arr[0] = .{ .int = 10 };
+    arr[1] = .{ .int = 20 };
+    arr[2] = .{ .int = 30 };
+    arr[3] = .{ .int = 40 };
+    o_arr.* = .{ .array_managed = arr };
+    const arr_orig_addr = @intFromPtr(arr.ptr);
+
+    const spacer_b = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    const o_map = heap.allocObject() orelse return error.TestFailed;
+    const map_slice = heap.g_state.allocManagedSlice(MapEntry, 1) orelse return error.TestFailed;
+    map_slice[0] = .{ .key = .{ .int = 1 }, .value = .{ .int = 100 } };
+    o_map.* = .{ .map = map_slice };
+
+    const spacer_c = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    const o_mapm = heap.allocObject() orelse return error.TestFailed;
+    const mapm_slice = heap.g_state.allocManagedSlice(MapEntry, 1) orelse return error.TestFailed;
+    mapm_slice[0] = .{ .key = .{ .int = 2 }, .value = .{ .int = 200 } };
+    o_mapm.* = .{ .map_managed = mapm_slice };
+
+    const spacer_d = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    const o_hashed = heap.allocObject() orelse return error.TestFailed;
+    const hashed_entries = heap.g_state.allocManagedSlice(MapEntry, 1) orelse return error.TestFailed;
+    hashed_entries[0] = .{ .key = .{ .int = 3 }, .value = .{ .int = 300 } };
+    const hashed_buckets = heap.g_state.allocManagedSlice(i32, 4) orelse return error.TestFailed;
+    hashed_buckets[0] = -1;
+    hashed_buckets[1] = 0;
+    hashed_buckets[2] = -1;
+    hashed_buckets[3] = -1;
+    o_hashed.* = .{ .map_hashed = .{ .entries = hashed_entries, .len = 1, .buckets = hashed_buckets } };
+
+    // Free the spacers to create gaps between the live blocks so compaction
+    // has to actually move data, not just leave it in place.
+    heap.freeBytesManaged(spacer_a);
+    heap.freeBytesManaged(spacer_b);
+    heap.freeBytesManaged(spacer_c);
+    heap.freeBytesManaged(spacer_d);
+
+    const info_before = heap.fragmentationInfo();
+    try std.testing.expect(info_before.free_bytes > 0);
+
+    heap.compactManagedHeap();
+
+    // Compaction clears the free lists outright (all freed space becomes
+    // implicit bump headroom instead), so fragmentationInfo reports zero.
+    const info_after = heap.fragmentationInfo();
+    try std.testing.expectEqual(@as(usize, 0), info_after.free_bytes);
+
+    // The array_managed block actually moved (spacer_a preceded it).
+    try std.testing.expect(@intFromPtr(o_arr.array_managed.ptr) < arr_orig_addr);
+
+    try std.testing.expectEqual(@as(usize, 4), o_arr.array_managed.len);
+    try std.testing.expectEqual(@as(i64, 10), o_arr.array_managed[0].int);
+    try std.testing.expectEqual(@as(i64, 20), o_arr.array_managed[1].int);
+    try std.testing.expectEqual(@as(i64, 30), o_arr.array_managed[2].int);
+    try std.testing.expectEqual(@as(i64, 40), o_arr.array_managed[3].int);
+
+    try std.testing.expectEqual(@as(i64, 1), o_map.map[0].key.int);
+    try std.testing.expectEqual(@as(i64, 100), o_map.map[0].value.int);
+
+    try std.testing.expectEqual(@as(i64, 2), o_mapm.map_managed[0].key.int);
+    try std.testing.expectEqual(@as(i64, 200), o_mapm.map_managed[0].value.int);
+
+    try std.testing.expectEqual(@as(i64, 3), o_hashed.map_hashed.entries[0].key.int);
+    try std.testing.expectEqual(@as(i64, 300), o_hashed.map_hashed.entries[0].value.int);
+    try std.testing.expectEqual(@as(usize, 4), o_hashed.map_hashed.buckets.len);
+    try std.testing.expectEqual(@as(i32, -1), o_hashed.map_hashed.buckets[0]);
+    try std.testing.expectEqual(@as(i32, 0), o_hashed.map_hashed.buckets[1]);
+}
+
+test "compactManagedHeap relocates struct_instance, closure, bigint, and variant_value blocks" {
+    var h: heap.State = .{};
+    try h.init(4096, 32, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    // A plain helper object referenced by pointer from struct_instance/
+    // closure/variant_value below. It lives in the object pool (a separate
+    // fixed allocation from the byte heap), so compaction never relocates it
+    // — only the managed byte blocks these objects own get moved.
+    const helper = heap.allocObject() orelse return error.TestFailed;
+    helper.* = .{ .array = &[_]Value{} };
+
+    const spacer_a = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    const o_struct = heap.allocObject() orelse return error.TestFailed;
+    const struct_fields = heap.g_state.allocManagedSlice(MapEntry, 1) orelse return error.TestFailed;
+    struct_fields[0] = .{ .key = .{ .int = 7 }, .value = .{ .int = 700 } };
+    o_struct.* = .{ .struct_instance = .{ .typ = helper, .fields = struct_fields } };
+    const struct_orig_addr = @intFromPtr(struct_fields.ptr);
+
+    const spacer_b = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    const o_closure = heap.allocObject() orelse return error.TestFailed;
+    const upvalues = heap.g_state.allocManagedSlice(*Object, 2) orelse return error.TestFailed;
+    upvalues[0] = helper;
+    upvalues[1] = helper;
+    o_closure.* = .{ .closure = .{ .func = helper, .upvalues = upvalues } };
+
+    const spacer_c = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    const o_big = heap.allocObject() orelse return error.TestFailed;
+    const limbs = heap.g_state.allocManagedSlice(std.math.big.Limb, 2) orelse return error.TestFailed;
+    limbs[0] = 0xDEAD;
+    limbs[1] = 0xBEEF;
+    o_big.* = .{ .bigint = .{ .limbs = limbs, .len = 2, .positive = true } };
+
+    const spacer_d = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    const o_variant = heap.allocObject() orelse return error.TestFailed;
+    const arm_fields = heap.g_state.allocManagedSlice(Value, 1) orelse return error.TestFailed;
+    arm_fields[0] = .{ .int = 9 };
+    const shared_values = heap.g_state.allocManagedSlice(Value, 1) orelse return error.TestFailed;
+    shared_values[0] = .{ .int = 99 };
+    o_variant.* = .{ .variant_value = .{
+        .typ = helper,
+        .tag = "Arm",
+        .ordinal = 0,
+        .payload = .{ .int = 9 },
+        .shared_values = shared_values,
+        .arm_fields = arm_fields,
+    } };
+
+    heap.freeBytesManaged(spacer_a);
+    heap.freeBytesManaged(spacer_b);
+    heap.freeBytesManaged(spacer_c);
+    heap.freeBytesManaged(spacer_d);
+
+    heap.compactManagedHeap();
+
+    try std.testing.expect(@intFromPtr(o_struct.struct_instance.fields.ptr) < struct_orig_addr);
+
+    try std.testing.expectEqual(@as(i64, 7), o_struct.struct_instance.fields[0].key.int);
+    try std.testing.expectEqual(@as(i64, 700), o_struct.struct_instance.fields[0].value.int);
+    try std.testing.expect(o_struct.struct_instance.typ == helper);
+
+    try std.testing.expectEqual(@as(usize, 2), o_closure.closure.upvalues.len);
+    try std.testing.expect(o_closure.closure.upvalues[0] == helper);
+    try std.testing.expect(o_closure.closure.upvalues[1] == helper);
+
+    try std.testing.expectEqual(@as(usize, 2), o_big.bigint.limbs.len);
+    try std.testing.expectEqual(@as(std.math.big.Limb, 0xDEAD), o_big.bigint.limbs[0]);
+    try std.testing.expectEqual(@as(std.math.big.Limb, 0xBEEF), o_big.bigint.limbs[1]);
+
+    try std.testing.expectEqual(@as(i64, 9), o_variant.variant_value.arm_fields[0].int);
+    try std.testing.expectEqual(@as(i64, 99), o_variant.variant_value.shared_values[0].int);
+}
+
+test "compactManagedHeap relocates struct_type fields when they are managed-heap-backed" {
+    // struct_type.fields is normally bump()-allocated permanent data (see the
+    // "never corrupts permanent data" test above), so compactFillBlocks/
+    // compactCountBlocks gate relocation behind isManagedAddr() as "defense
+    // in depth". This test drives that true branch directly: fields backed
+    // by an ordinary managed-heap allocation must still be found, moved, and
+    // have the owning object's slice updated correctly.
+    var h: heap.State = .{};
+    try h.init(4096, 32, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    const empty_alts = @import("../lang/value.zig").FieldTypeSpec{ .alts = &.{} };
+
+    const spacer = heap.allocBytesManaged(64) orelse return error.TestFailed;
+    const typ_obj = heap.allocObject() orelse return error.TestFailed;
+    const fields = heap.g_state.allocManagedSlice(StructFieldSpec, 2) orelse return error.TestFailed;
+    fields[0] = .{ .name = "x", .typ = empty_alts };
+    fields[1] = .{ .name = "y", .typ = empty_alts };
+    typ_obj.* = .{ .struct_type = .{ .name = "P", .qualified_name = "@m:P", .fields = fields } };
+    const orig_addr = @intFromPtr(fields.ptr);
+
+    heap.freeBytesManaged(spacer);
+    heap.compactManagedHeap();
+
+    try std.testing.expect(@intFromPtr(typ_obj.struct_type.fields.ptr) < orig_addr);
+    try std.testing.expectEqual(@as(usize, 2), typ_obj.struct_type.fields.len);
+    try std.testing.expectEqualStrings("x", typ_obj.struct_type.fields[0].name);
+    try std.testing.expectEqualStrings("y", typ_obj.struct_type.fields[1].name);
+}
+
+test "compactManagedHeap updates string_view, array_view, and iterator sub-slice pointers" {
+    // string_view/array_view/iterator hold non-owning slices into another
+    // object's managed block. They're never counted/filled by
+    // compactCountBlocks/compactFillBlocks (they own nothing), but
+    // compactUpdateObj's second pass must still retarget their slice via
+    // compactFindReloc against the owning block's relocation, preserving the
+    // correct sub-range offset and length.
+    var h: heap.State = .{};
+    try h.init(4096, 32, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    const spacer_a = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    const o_str = heap.allocObject() orelse return error.TestFailed;
+    const str_bytes = heap.allocBytesManaged(32) orelse return error.TestFailed;
+    for (str_bytes, 0..) |*b, i| b.* = @intCast(i);
+    o_str.* = .{ .dyn_string = str_bytes };
+
+    const o_view = heap.allocObject() orelse return error.TestFailed;
+    o_view.* = .{ .string_view = .{ .bytes = str_bytes[8..16], .source = o_str } };
+
+    const spacer_b = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    const o_arr = heap.allocObject() orelse return error.TestFailed;
+    const arr = heap.g_state.allocManagedSlice(Value, 4) orelse return error.TestFailed;
+    arr[0] = .{ .int = 1 };
+    arr[1] = .{ .int = 2 };
+    arr[2] = .{ .int = 3 };
+    arr[3] = .{ .int = 4 };
+    o_arr.* = .{ .array_managed = arr };
+
+    const o_aview = heap.allocObject() orelse return error.TestFailed;
+    o_aview.* = .{ .array_view = .{ .items = arr[1..3], .source = o_arr } };
+
+    const o_iter_str = heap.allocObject() orelse return error.TestFailed;
+    o_iter_str.* = .{ .iterator = .{ .kind = .string, .index = 0, .string = str_bytes[2..6], .source = o_str } };
+
+    const o_iter_arr = heap.allocObject() orelse return error.TestFailed;
+    o_iter_arr.* = .{ .iterator = .{ .kind = .array, .index = 0, .array = arr[0..2], .source = o_arr } };
+
+    const spacer_c = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    const o_map = heap.allocObject() orelse return error.TestFailed;
+    const map_slice = heap.g_state.allocManagedSlice(MapEntry, 1) orelse return error.TestFailed;
+    map_slice[0] = .{ .key = .{ .int = 5 }, .value = .{ .int = 50 } };
+    o_map.* = .{ .map_managed = map_slice };
+
+    const o_iter_map = heap.allocObject() orelse return error.TestFailed;
+    o_iter_map.* = .{ .iterator = .{ .kind = .map, .index = 0, .map = map_slice[0..1], .source = o_map } };
+
+    // Range iterator: no slice to relocate, but exercises the trivial
+    // `.range => {}` arm of compactUpdateObj's iterator-kind switch.
+    const o_iter_range = heap.allocObject() orelse return error.TestFailed;
+    o_iter_range.* = .{ .iterator = .{ .kind = .range, .index = 0, .range_current = 0, .range_max = 10 } };
+
+    heap.freeBytesManaged(spacer_a);
+    heap.freeBytesManaged(spacer_b);
+    heap.freeBytesManaged(spacer_c);
+
+    heap.compactManagedHeap();
+
+    // Owning blocks kept their data.
+    try std.testing.expectEqual(@as(u8, 8), o_str.dyn_string[8]);
+    try std.testing.expectEqual(@as(i64, 1), o_arr.array_managed[0].int);
+
+    // Views follow the relocated owning block at the correct offset/length.
+    try std.testing.expectEqual(@as(usize, 8), o_view.string_view.bytes.len);
+    try std.testing.expectEqual(@as(u8, 8), o_view.string_view.bytes[0]);
+    try std.testing.expectEqual(@as(u8, 9), o_view.string_view.bytes[1]);
+
+    try std.testing.expectEqual(@as(usize, 2), o_aview.array_view.items.len);
+    try std.testing.expectEqual(@as(i64, 2), o_aview.array_view.items[0].int);
+    try std.testing.expectEqual(@as(i64, 3), o_aview.array_view.items[1].int);
+
+    try std.testing.expectEqual(@as(usize, 4), o_iter_str.iterator.string.len);
+    try std.testing.expectEqual(@as(u8, 2), o_iter_str.iterator.string[0]);
+
+    try std.testing.expectEqual(@as(usize, 2), o_iter_arr.iterator.array.len);
+    try std.testing.expectEqual(@as(i64, 1), o_iter_arr.iterator.array[0].int);
+    try std.testing.expectEqual(@as(i64, 2), o_iter_arr.iterator.array[1].int);
+
+    try std.testing.expectEqual(@as(i64, 5), o_iter_map.iterator.map[0].key.int);
+    try std.testing.expectEqual(@as(i64, 50), o_iter_map.iterator.map[0].value.int);
+
+    // Range iterator is untouched (no slice needed relocation).
+    try std.testing.expectEqual(@as(f64, 10), o_iter_range.iterator.range_max);
+}
+
+// ── Paranoia / overlap-check mode ──────────────────────────────────────────
+//
+// paranoiaOn() is gated by a comptime build flag (-Dheap_paranoia=true) OR
+// the runtime `heap.paranoia` var (the CLI's GENGO_HEAP_PARANOIA=1 path) —
+// so a normal, non-stress test build can still exercise assertNotLive's
+// full switch by flipping the runtime flag directly, exactly as the CLI
+// does. This drives takeFreeBlock's and freeBytesManaged's paranoia checks
+// across one live object of every ObjTag assertNotLive inspects, confirming
+// the "no real overlap" case reports cleanly (a false-positive overlap
+// would @panic and abort the whole test binary).
+
+test "paranoia mode's overlap check passes across every inspected ObjTag with no false positive" {
+    var h: heap.State = .{};
+    try h.init(4096, 32, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    heap.paranoia = true;
+    defer heap.paranoia = false;
+
+    const o_str = heap.allocObject() orelse return error.TestFailed;
+    const str_bytes = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    o_str.* = .{ .dyn_string = str_bytes };
+
+    const o_sb = heap.allocObject() orelse return error.TestFailed;
+    const sb_buf = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    o_sb.* = .{ .string_builder = .{ .buf = sb_buf, .len = 0 } };
+
+    const o_arr = heap.allocObject() orelse return error.TestFailed;
+    const arr = heap.g_state.allocManagedSlice(Value, 1) orelse return error.TestFailed;
+    arr[0] = .{ .int = 1 };
+    o_arr.* = .{ .array_managed = arr };
+
+    const o_map = heap.allocObject() orelse return error.TestFailed;
+    const map_slice = heap.g_state.allocManagedSlice(MapEntry, 1) orelse return error.TestFailed;
+    map_slice[0] = .{ .key = .{ .int = 1 }, .value = .{ .int = 2 } };
+    o_map.* = .{ .map = map_slice };
+
+    const o_mapm = heap.allocObject() orelse return error.TestFailed;
+    const mapm_slice = heap.g_state.allocManagedSlice(MapEntry, 1) orelse return error.TestFailed;
+    mapm_slice[0] = .{ .key = .{ .int = 3 }, .value = .{ .int = 4 } };
+    o_mapm.* = .{ .map_managed = mapm_slice };
+
+    const o_hashed = heap.allocObject() orelse return error.TestFailed;
+    const hashed_entries = heap.g_state.allocManagedSlice(MapEntry, 1) orelse return error.TestFailed;
+    hashed_entries[0] = .{ .key = .{ .int = 5 }, .value = .{ .int = 6 } };
+    const hashed_buckets = heap.g_state.allocManagedSlice(i32, 4) orelse return error.TestFailed;
+    o_hashed.* = .{ .map_hashed = .{ .entries = hashed_entries, .len = 1, .buckets = hashed_buckets } };
+
+    const helper = heap.allocObject() orelse return error.TestFailed;
+    helper.* = .{ .array = &[_]Value{} };
+
+    const o_struct = heap.allocObject() orelse return error.TestFailed;
+    const struct_fields = heap.g_state.allocManagedSlice(MapEntry, 1) orelse return error.TestFailed;
+    struct_fields[0] = .{ .key = .{ .int = 7 }, .value = .{ .int = 8 } };
+    o_struct.* = .{ .struct_instance = .{ .typ = helper, .fields = struct_fields } };
+
+    const o_variant = heap.allocObject() orelse return error.TestFailed;
+    const arm_fields = heap.g_state.allocManagedSlice(Value, 1) orelse return error.TestFailed;
+    arm_fields[0] = .{ .int = 9 };
+    const shared_values = heap.g_state.allocManagedSlice(Value, 1) orelse return error.TestFailed;
+    shared_values[0] = .{ .int = 10 };
+    o_variant.* = .{ .variant_value = .{
+        .typ = helper,
+        .tag = "Arm",
+        .ordinal = 0,
+        .payload = .{ .int = 9 },
+        .shared_values = shared_values,
+        .arm_fields = arm_fields,
+    } };
+
+    const o_closure = heap.allocObject() orelse return error.TestFailed;
+    const upvalues = heap.g_state.allocManagedSlice(*Object, 1) orelse return error.TestFailed;
+    upvalues[0] = helper;
+    o_closure.* = .{ .closure = .{ .func = helper, .upvalues = upvalues } };
+
+    const o_big = heap.allocObject() orelse return error.TestFailed;
+    const limbs = heap.g_state.allocManagedSlice(std.math.big.Limb, 1) orelse return error.TestFailed;
+    limbs[0] = 42;
+    o_big.* = .{ .bigint = .{ .limbs = limbs, .len = 1, .positive = true } };
+
+    try std.testing.expectEqual(@as(usize, 11), heap.liveObjectCount());
+
+    // A wholly unrelated block: freeing it makes assertNotLive scan every
+    // live object above (hitting every tag in its switch) and find no
+    // overlap — must not panic.
+    const scratch = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    heap.freeBytesManaged(scratch);
+
+    // Re-allocating the same class exercises takeFreeBlock's paranoia check
+    // (assertNotLive runs again on the block about to be handed back out).
+    const reused = heap.allocBytesManaged(16) orelse return error.TestFailed;
+    try std.testing.expect(reused.ptr == scratch.ptr);
+}
+
+// ── bump() edge cases ──────────────────────────────────────────────────────
+
+test "bump handles a zero-size request and an exact-fit request at the frontier" {
+    var h: heap.State = .{};
+    try h.init(256, 8, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    // A zero-size request must succeed and land exactly at the current
+    // permanent_bump (heap.len for a fresh heap) — see the "very first
+    // bump() call (even n == 0) can land exactly there" comment on bump().
+    const zero_ptr = heap.bump(u8, 0) orelse return error.TestFailed;
+    try std.testing.expectEqual(h.heap.len, @intFromPtr(zero_ptr) - @intFromPtr(h.heap.ptr));
+
+    // Consume the entire remaining permanent region in one exact-fit request
+    // (sz == permanent_bump) — the boundary must still succeed, not just
+    // requests strictly smaller than what remains.
+    const remaining = h.permanent_bump - h.overflow_bump;
+    const exact = heap.bump(u8, remaining) orelse return error.TestFailed;
+    try std.testing.expectEqual(h.overflow_bump, @intFromPtr(exact) - @intFromPtr(h.heap.ptr));
+    try std.testing.expectEqual(@as(usize, 0), h.permanent_bump - h.overflow_bump);
+
+    // No room remains for even one more byte.
+    try std.testing.expect(heap.bump(u8, 1) == null);
+}
+
+// ── objectPoolIndex edge cases ─────────────────────────────────────────────
+
+test "objectPoolIndex covers the first/last pool slots and rejects a foreign pointer" {
+    var h: heap.State = .{};
+    try h.init(1024, 4, std.testing.allocator);
+    defer h.deinit();
+    heap.setActive(&h);
+
+    // A pointer that was never handed out by allocObject() — not inside the
+    // pool's backing allocation at all — must resolve to the sentinel, not
+    // be mistaken for a valid index.
+    var stray: Object = .{ .array = &[_]Value{} };
+    try std.testing.expectEqual(@as(u16, 0xFFFF), heap.objectPoolIndex(&stray));
+
+    const first = heap.allocObject() orelse return error.TestFailed;
+    _ = heap.allocObject() orelse return error.TestFailed;
+    _ = heap.allocObject() orelse return error.TestFailed;
+    const last = heap.allocObject() orelse return error.TestFailed;
+
+    try std.testing.expectEqual(@as(u16, 0), heap.objectPoolIndex(first));
+    try std.testing.expectEqual(@as(u16, 3), heap.objectPoolIndex(last));
+}

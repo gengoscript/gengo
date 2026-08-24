@@ -674,6 +674,14 @@ fn zeroValueForFieldSpec(spec: vmod.FieldTypeSpec) Value {
             .decimal_t => return .{ .decimal = 0 },
             .boolean => return .{ .boolean = false },
             .rune_t => return .{ .rune = 0 },
+            // Matches emitZeroValue's (compiler_decls.zig) plain-string-local
+            // zero value (an empty string constant) -- without this, a
+            // string-typed struct field with no initializer zero-inited to
+            // `null` instead of "", an asymmetry a caller doing `w.s == ""`
+            // would silently never observe as true. staticSS needs no
+            // VMContext/allocation: it's a comptime-keyed static StringSlice,
+            // same immortal-string pattern value.zig already uses elsewhere.
+            .string => return .{ .string = vmod.staticSS("") },
             else => {},
         }
     }

@@ -204,8 +204,18 @@ pub const Runtime = struct {
         globals.setActive(&rt.globals_state);
         rt.chunk_state.reset();
         rt.globals_state.reset();
+        // heap_state/vm_state default to zero-length backing storage
+        // (heap.State.heap / vm_state's stack/frames/defer_stack all default
+        // to empty slices) -- .reset() alone only resets bump pointers and
+        // free-list bookkeeping WITHIN that backing storage, it doesn't
+        // allocate it. initWithConfig() (which this function otherwise
+        // mirrors field-for-field) calls .init() on both before .reset();
+        // this was missing here, so a Runtime built via init()/withPolicy()
+        // had a genuinely zero-capacity heap/stack on every native target.
         heap.setActive(&rt.heap_state);
         vm.setActive(&rt.vm_state);
+        rt.heap_state.init(heap.HeapSize, heap.MaxObjects, std.heap.page_allocator) catch @panic("OOM");
+        rt.vm_state.init(vms.MaxStack, vms.MaxFrames, cfg.max_defers, heap.HeapSize, std.heap.page_allocator) catch @panic("OOM");
         rt.vm_state.reset();
         rt.heap_state.reset();
         tasks_mod.setActive(&rt.task_state);
