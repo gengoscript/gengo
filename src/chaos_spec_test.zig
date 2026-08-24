@@ -28,6 +28,74 @@ fn runWithCapture(rt: *api.Runtime, src: []const u8, path: []const u8) struct { 
     return .{ result, g_stdout.items, g_stderr.items };
 }
 
+// ── Canned-stdin read override ─────────────────────────────────────────────
+// Mirrors runtime/io.zig's own testReadOverride pattern (see test_read_chunks
+// there), but serves one contiguous buffer with a cursor instead of a list of
+// chunks, and — critically — implements is_line semantics itself: when an
+// override is installed, readBytesRaw/readAllBytesRaw call it directly
+// instead of looping byte-by-byte (that per-byte loop only exists for the
+// real-fd path), so a realistic override must return a whole line (up to and
+// including '\n') in a single call for is_line=true.
+var g_stdin_data: []const u8 = "";
+var g_stdin_pos: usize = 0;
+
+fn captureStdinRead(buf: []u8, is_line: bool) isize {
+    if (g_stdin_pos >= g_stdin_data.len) return -1;
+    const rest = g_stdin_data[g_stdin_pos..];
+    var take: usize = rest.len;
+    if (is_line) {
+        if (std.mem.indexOfScalar(u8, rest, '\n')) |idx| take = idx + 1;
+    }
+    take = @min(take, buf.len);
+    @memcpy(buf[0..take], rest[0..take]);
+    g_stdin_pos += take;
+    return @intCast(take);
+}
+
+// Like runWithCapture, but also installs a canned-stdin read override before
+// running so std.io.read/read_all/readline see stdin_data instead of a real
+// fd — never touches fd 0.
+fn runWithStdin(rt: *api.Runtime, src: []const u8, stdin_data: []const u8) struct { api.RuntimeResult, []const u8, []const u8 } {
+    g_stdout.clearRetainingCapacity();
+    g_stderr.clearRetainingCapacity();
+    g_stdin_data = stdin_data;
+    g_stdin_pos = 0;
+    io.setWriteOverrides(captureStdout, captureStderr);
+    io.setReadOverride(captureStdinRead);
+    defer io.clearWriteOverrides();
+    defer io.clearReadOverride();
+    const result = rt.run(src);
+    return .{ result, g_stdout.items, g_stderr.items };
+}
+
+fn expectStdinOutput(src: []const u8, stdin_data: []const u8, expected: []const u8) !void {
+    var rt = try setup();
+    defer rt.deinit();
+
+    g_stdout = std.array_list.Managed(u8).init(std.testing.allocator);
+    g_stderr = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer g_stdout.deinit();
+    defer g_stderr.deinit();
+
+    const r = runWithStdin(&rt, src, stdin_data);
+    const result = r[0];
+    const output = r[1];
+
+    if (result != .ok) {
+        if (result == .compile_error) {
+            std.debug.print("inline compile error: {s}\n", .{result.compile_error.msg});
+            return error.TestUnexpectedResult;
+        }
+        if (result == .runtime_error) {
+            std.debug.print("inline runtime error: {s}\n", .{result.runtime_error.msg});
+            return error.TestUnexpectedResult;
+        }
+        return error.TestUnexpectedResult;
+    }
+
+    try std.testing.expectEqualStrings(expected, output);
+}
+
 fn readFileAlloc(alloc: std.mem.Allocator, path: []const u8, max_bytes: usize) ![]u8 {
     const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0);
     defer _ = std.posix.system.close(fd);
@@ -226,6 +294,145 @@ test "invoke parity: immediate and deferred method dispatch agree" {
         \\shape:7
         \\user:alice
         \\
+    );
+}
+
+// ── std.io dispatch coverage (print/printf/eprint*/read*) ─────────────────
+// These 8 native dispatch cases in lang/native/io.zig were previously
+// untested anywhere: they all require allow_io=true, which
+// compiler_test.zig's setup() deliberately never grants (see that file's
+// top-of-file comment about corrupting the --listen=- fd-1 test protocol).
+// This file's capture-override machinery makes allow_io=true safe.
+
+test "std.io.print writes with no added newline and concatenates args in one call" {
+    try expectInlineOutput(
+        \\std := import("std")
+        \\std.io.print("a")
+        \\std.io.print("b")
+        \\std.io.print("c", "d")
+    ,
+        "abcd",
+    );
+}
+
+test "std.io.printf writes formatted output with no added newline" {
+    try expectInlineOutput(
+        \\std := import("std")
+        \\std.io.printf("%d-%s", 42, "x")
+        \\std.io.printf("|%d", 7)
+    ,
+        "42-x|7",
+    );
+}
+
+test "std.io.eprint/eprintln/eprintf write to stderr, not stdout" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    g_stdout = std.array_list.Managed(u8).init(std.testing.allocator);
+    g_stderr = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer g_stdout.deinit();
+    defer g_stderr.deinit();
+
+    const src =
+        \\std := import("std")
+        \\std.io.eprint("a")
+        \\std.io.eprintln("b")
+        \\std.io.eprintf("%d", 5)
+        \\std.io.println("stdout-ok")
+    ;
+    const r = runWithCapture(&rt, src, "");
+    const result = r[0];
+    const stdout_out = r[1];
+    const stderr_out = r[2];
+
+    if (result != .ok) {
+        if (result == .runtime_error) std.debug.print("runtime error: {s}\n", .{result.runtime_error.msg});
+        return error.TestUnexpectedResult;
+    }
+
+    try std.testing.expectEqualStrings("stdout-ok\n", stdout_out);
+    try std.testing.expectEqualStrings("ab\n5", stderr_out);
+}
+
+test "std.io.read(n) returns null without consuming stdin when n is zero or negative" {
+    try expectStdinOutput(
+        \\std := import("std")
+        \\a := std.io.read(0)
+        \\std.io.println(a == null)
+        \\b := std.io.read(-3)
+        \\std.io.println(b == null)
+        \\c := std.io.read(20)
+        \\std.io.println(c)
+    ,
+        "hello",
+        "true\ntrue\nhello\n",
+    );
+}
+
+test "std.io.read(n) returns at most n bytes, leaving the rest for the next read" {
+    // stdin has 11 bytes; the first read(5) must not spill into the second.
+    try expectStdinOutput(
+        \\std := import("std")
+        \\first := std.io.read(5)
+        \\second := std.io.read(6)
+        \\std.io.println(first)
+        \\std.io.println(second)
+    ,
+        "hello world",
+        "hello\n world\n",
+    );
+}
+
+test "std.io.read(n) with n greater than available stdin returns only what's there" {
+    try expectStdinOutput(
+        \\std := import("std")
+        \\got := std.io.read(999)
+        \\std.io.println(got)
+        \\next := std.io.read(5)
+        \\std.io.println(next == null)
+    ,
+        "hi",
+        "hi\ntrue\n",
+    );
+}
+
+test "std.io.read_all() returns everything the stdin override provides" {
+    try expectStdinOutput(
+        \\std := import("std")
+        \\data := std.io.read_all()
+        \\std.io.println(data)
+    ,
+        "all the bytes\nincluding embedded newlines\n",
+        "all the bytes\nincluding embedded newlines\n\n",
+    );
+}
+
+test "std.io.readline() strips trailing newline (and CR) and advances across calls" {
+    try expectStdinOutput(
+        \\std := import("std")
+        \\l1 := std.io.readline()
+        \\l2 := std.io.readline()
+        \\l3 := std.io.readline()
+        \\std.io.println(l1)
+        \\std.io.println(l2)
+        \\std.io.println(l3 == null)
+    ,
+        "line one\nline two\n",
+        "line one\nline two\ntrue\n",
+    );
+}
+
+test "std.io.readline() strips CRLF and returns an unterminated final line unchanged" {
+    try expectStdinOutput(
+        \\std := import("std")
+        \\l1 := std.io.readline()
+        \\l2 := std.io.readline()
+        \\std.io.println(l1)
+        \\std.io.println(l2)
+    ,
+        "crlf line\r\nno newline at eof",
+        "crlf line\nno newline at eof\n",
     );
 }
 

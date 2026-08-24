@@ -8556,6 +8556,59 @@ test "compiler: std.math abs/max/min raise RangeError (not a crash) at the i64 b
     try std.testing.expectEqual(@as(i64, 3), min_n.int);
 }
 
+// The 10 functions selectStdMathUnaryIntrinsicOp/BinaryIntrinsicOp/
+// TernaryIntrinsicOp (compiler.zig) recognize by exact direct-call name --
+// abs, sqrt, floor, ceil, trunc, round, sign, min, max, clamp -- are
+// compiled straight to a dedicated VM opcode (.abs, .sqrt, etc.) at the
+// call site itself, NOT the fusion pass (confirmed empirically: `gengo
+// disasm --no-fusion` still emits the same intrinsic opcode). Every
+// existing `std.math.sqrt(x)`-shaped test in this file therefore actually
+// exercises vm.zig's opcode handler, never math.zig's own
+// `.math_sqrt`/`.math_abs`/etc. dispatch arms -- which is why math.zig's
+// coverage never moved no matter how many direct-call tests were added.
+// The intrinsic recognition only fires for a call the compiler can prove
+// is a DIRECT reference to that exact global by name; binding the function
+// to a local first (`f := std.math.sqrt`) makes the subsequent `f(x)` an
+// INDIRECT call through a function value, which the intrinsic selectors
+// never see -- confirmed via disasm to compile to a plain `call`, reaching
+// math.zig's real native dispatch. This test forces exactly that for all
+// 10 otherwise-unreachable-from-native-code functions.
+test "compiler: std.math intrinsic-shadowed functions (abs/sqrt/floor/ceil/trunc/round/sign/min/max/clamp) reach math.zig's real dispatch via indirect call" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func viaAbsInt() int { f := std.math.abs; return f(-7) }
+        \\func viaAbsFloat() float { f := std.math.abs; return f(-2.5) }
+        \\func viaAbsMinIntOverflow() int { f := std.math.abs; return f(-9223372036854775808) }
+        \\func viaSqrtOk() float { f := std.math.sqrt; return f(16.0) }
+        \\func viaSqrtNeg() float { f := std.math.sqrt; return f(-1.0) }
+        \\func viaFloor() float { f := std.math.floor; return f(3.7) }
+        \\func viaCeil() float { f := std.math.ceil; return f(3.2) }
+        \\func viaTrunc() float { f := std.math.trunc; return f(-3.7) }
+        \\func viaRound() float { f := std.math.round; return f(3.5) }
+        \\func viaSignInt() int { f := std.math.sign; return f(-42) }
+        \\func viaSignFloatZero() float { f := std.math.sign; return f(0.0) }
+        \\func viaMinInt() int { f := std.math.min; return f(3, 7) }
+        \\func viaMaxFloat() float { f := std.math.max; return f(3.5, 7.5) }
+        \\func viaClamp() float { f := std.math.clamp; return f(20, 1, 10) }
+    );
+    try std.testing.expectEqual(@as(i64, 7), (try rt.callGlobal("viaAbsInt", &.{})).int);
+    try std.testing.expectEqual(@as(f64, 2.5), (try rt.callGlobal("viaAbsFloat", &.{})).float);
+    try std.testing.expectError(error.RangeError, rt.callGlobal("viaAbsMinIntOverflow", &.{}));
+    try std.testing.expectEqual(@as(f64, 4.0), (try rt.callGlobal("viaSqrtOk", &.{})).float);
+    try std.testing.expectError(error.RangeError, rt.callGlobal("viaSqrtNeg", &.{}));
+    try std.testing.expectEqual(@as(f64, 3.0), (try rt.callGlobal("viaFloor", &.{})).float);
+    try std.testing.expectEqual(@as(f64, 4.0), (try rt.callGlobal("viaCeil", &.{})).float);
+    try std.testing.expectEqual(@as(f64, -3.0), (try rt.callGlobal("viaTrunc", &.{})).float);
+    try std.testing.expectEqual(@as(f64, 4.0), (try rt.callGlobal("viaRound", &.{})).float);
+    try std.testing.expectEqual(@as(i64, -1), (try rt.callGlobal("viaSignInt", &.{})).int);
+    try std.testing.expectEqual(@as(f64, 0.0), (try rt.callGlobal("viaSignFloatZero", &.{})).float);
+    try std.testing.expectEqual(@as(i64, 3), (try rt.callGlobal("viaMinInt", &.{})).int);
+    try std.testing.expectEqual(@as(f64, 7.5), (try rt.callGlobal("viaMaxFloat", &.{})).float);
+    try std.testing.expectEqual(@as(f64, 10.0), (try rt.callGlobal("viaClamp", &.{})).float);
+}
+
 // std.math's trig/log/exp/root family: each computes a correct value in its
 // normal domain, and (where math.zig's dispatch adds an explicit guard, or
 // the result comes back non-finite) raises RangeError instead of returning
