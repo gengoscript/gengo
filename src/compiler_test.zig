@@ -13222,3 +13222,326 @@ test "runtime: runPathWithProvider(test_mode=true) with a rooted compile runs te
     try std.testing.expectEqualStrings("two plus two", rt.test_names[0]);
     try std.testing.expect(!rt.test_failed);
 }
+
+// ── std.core.append on a named array type (second coverage pass) ──────────
+//
+// nativeAppend's `is_named` branch (core.zig ~119-141) was entirely
+// unexercised: every prior std.core.append test appended onto a plain,
+// unwrapped array. `var xs []T = [...]` wraps the array in an (anonymous,
+// per-decl) named_value whose named_type has base == .array_t and an
+// elem_spec pointing at T's own FieldTypeSpec, so appending onto it takes a
+// completely different path: each new element is checked against elem_spec
+// via matchesTypeSpec (a bare-scalar type-tag check) AND, when T is itself a
+// named scalar type, validateErasedNamedValueForSpec re-runs T's full
+// construction (range check) and predicate chain on the erased scalar
+// value being appended — because matchesTypeSpec alone only confirms "this
+// is an int", not "this int is a valid Meter/Score".
+test "compiler: std.core.append on a named array type validates each new element's range/predicate/type, not just a bare scalar tag" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Meter int range 0..100
+        \\type Score int predicate func(x) { return x >= 0 and x <= 100 }
+        \\func appendValidRange() int {
+        \\    var xs []Meter = [Meter(10)]
+        \\    xs = std.core.append(xs, 20, 30)
+        \\    return std.core.len(xs)
+        \\}
+        \\func appendRangeViolation() []Meter {
+        \\    var xs []Meter = [Meter(10)]
+        \\    xs = std.core.append(xs, 200)
+        \\    return xs
+        \\}
+        \\func appendValidPredicate() int {
+        \\    var xs []Score = [Score(10)]
+        \\    xs = std.core.append(xs, 50)
+        \\    return std.core.len(xs)
+        \\}
+        \\func appendPredicateViolation() []Score {
+        \\    var xs []Score = [Score(10)]
+        \\    xs = std.core.append(xs, 200)
+        \\    return xs
+        \\}
+        \\func appendTypeMismatch() []Meter {
+        \\    var xs []Meter = [Meter(10)]
+        \\    xs = std.core.append(xs, "not a number")
+        \\    return xs
+        \\}
+        \\func appendedResultStaysArray() bool {
+        \\    var xs []Meter = [Meter(10)]
+        \\    xs = std.core.append(xs, 20)
+        \\    return std.core.is_array(xs) and std.core.type_of(xs) == "array"
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 3), (try rt.callGlobal("appendValidRange", &.{})).int);
+    try std.testing.expectError(error.RangeError, rt.callGlobal("appendRangeViolation", &.{}));
+    try std.testing.expectEqual(@as(i64, 2), (try rt.callGlobal("appendValidPredicate", &.{})).int);
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("appendPredicateViolation", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("appendTypeMismatch", &.{}));
+    try std.testing.expect((try rt.callGlobal("appendedResultStaysArray", &.{})).boolean);
+}
+
+// ── std.core.remove: front/end-shift branches (second coverage pass) ──────
+//
+// The prior round covered "middle" (shifts both halves), "last element"
+// (the items_len==1 special case that skips both memcpy calls entirely),
+// and both out-of-range error paths, but never a removal at index 0 (the
+// first memcpy is a no-op, only the second shifts) nor at the true last
+// index of a >1-element array (the second memcpy is a no-op, only the
+// first copies) — two structurally distinct empty-vs-nonempty memcpy
+// combinations nativeRemove's items_len>1 branch can take.
+test "compiler: std.core.remove shifts correctly when removing the front or the true last index of a multi-element array" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func removeFront() bool {
+        \\    a := [1, 2, 3, 4]
+        \\    b := std.core.remove(a, 0)
+        \\    return std.core.deep_equal(b, [2, 3, 4]) and std.core.deep_equal(a, [1, 2, 3, 4])
+        \\}
+        \\func removeTrueLastIndex() bool {
+        \\    a := [1, 2, 3, 4]
+        \\    b := std.core.remove(a, 3)
+        \\    return std.core.deep_equal(b, [1, 2, 3]) and std.core.deep_equal(a, [1, 2, 3, 4])
+        \\}
+    );
+    try std.testing.expect((try rt.callGlobal("removeFront", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("removeTrueLastIndex", &.{})).boolean);
+}
+
+// ── std.conv.to_string / string(...) (second coverage pass) ───────────────
+//
+// nativeConvToString's decimal branch (vmod.decimalRawAndScale), its
+// inline_variant branch (both the no-payload and payload-present buffer-
+// building code, including the recursive nativeConvToString call on the
+// payload), and its actor_ref branch were all unexercised. Also verifies
+// that converting a heap object nativeConvToString has no case for at all
+// (a struct instance, or a bare closure) correctly falls through to
+// stringBytesFromObj and raises TypeError rather than silently succeeding
+// with garbage — string(x)/std.conv.to_string(x) share the exact same
+// nativeConvToString implementation (cast_string's VM op just calls it
+// directly), so testing via the `string(...)` builtin exercises identical
+// code to std.conv.to_string.
+test "compiler: string(...)/std.conv.to_string cover decimal, inline_variant (with/without payload), actor_ref, and reject struct/closure" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Money decimal 2
+        \\type Shape variant {
+        \\    tag(label string),
+        \\    point,
+        \\}
+        \\type Box struct { x int }
+        \\func decimalToString() string { return string(Money(9.99)) }
+        \\func decimalNegativeToString() string { return string(Money(-3.50)) }
+        \\func variantNoPayloadToString() string { return string(Shape.point) }
+        \\func variantPayloadToString() string { return string(Shape.tag("hi")) }
+        \\func actorRefToString() bool {
+        \\    a := self()
+        \\    s := string(a)
+        \\    return std.string.starts_with(s, "actor<")
+        \\}
+        \\func structToStringErrors() string { return string(Box{x: 1}) }
+        \\func closureToStringErrors() string {
+        \\    f := func() int { return 1 }
+        \\    return string(f)
+        \\}
+    );
+    try std.testing.expectEqualStrings("9.99", try vms.asStringValue(try rt.callGlobal("decimalToString", &.{})));
+    try std.testing.expectEqualStrings("-3.5", try vms.asStringValue(try rt.callGlobal("decimalNegativeToString", &.{})));
+    try std.testing.expectEqualStrings("Shape.point", try vms.asStringValue(try rt.callGlobal("variantNoPayloadToString", &.{})));
+    try std.testing.expectEqualStrings("Shape.tag(hi)", try vms.asStringValue(try rt.callGlobal("variantPayloadToString", &.{})));
+    try std.testing.expect((try rt.callGlobal("actorRefToString", &.{})).boolean);
+    try std.testing.expectError(error.TypeError, rt.callGlobal("structToStringErrors", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("closureToStringErrors", &.{}));
+}
+
+// ── std.core.type_of (second coverage pass) ────────────────────────────────
+//
+// Covers three more of nativeTypeNameValue's object branches that the prior
+// round's "variant/enum/error/named-error/function/string_view" sweep
+// missed: .string_builder, .bigint, and .task_type (a task type's own
+// nominal identifier, referenced directly rather than spawned/called — see
+// vm.zig's `.task_type` call-dispatch arm, which is the only other place a
+// bare task-type identifier value is otherwise consumed).
+test "compiler: std.core.type_of covers string_builder, bigint, and task_type values" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Worker task func(start int, reply actor) {}
+        \\func typeOfStringBuilder() string {
+        \\    b := std.string.builder()
+        \\    return std.core.type_of(b)
+        \\}
+        \\func typeOfBigint() string { return std.core.type_of(bigint(5)) }
+        \\func typeOfTaskType() string { return std.core.type_of(Worker) }
+    );
+    try std.testing.expectEqualStrings("string_builder", try vms.asStringValue(try rt.callGlobal("typeOfStringBuilder", &.{})));
+    try std.testing.expectEqualStrings("bigint", try vms.asStringValue(try rt.callGlobal("typeOfBigint", &.{})));
+    try std.testing.expectEqualStrings("Worker", try vms.asStringValue(try rt.callGlobal("typeOfTaskType", &.{})));
+}
+
+// ── compiler_decls.zig second coverage pass (2026-08-25) ────────────────────
+// A first pass already covered the compile-time constant evaluator, generic
+// struct/variant/func arg-count errors, named error/task type declarations,
+// and interface/method decl gaps. This pass targets what that pass left:
+// checkStructFieldType's DIRECT (non-ref) self-reference rejection (never
+// exercised by any fixture or test — grep for the exact error text turns up
+// only its one definition site), a struct field typed as an interface,
+// constrained generic VARIANT type parameters (only generic STRUCT and
+// generic FUNC constraints had tests), the "generic interfaces are not yet
+// supported" / "generic alias arguments cannot contain type parameters"
+// guards, enum explicit-representation-value validation (duplicate and
+// out-of-range), the namedTypeDecl-specific bare-`array`-keyword error, and
+// the "unknown constraint" diagnostic on both generic funcs and generic
+// types (isKnownConstraint's failure path had no test at either call site).
+
+test "compiler: a struct field cannot reference its own type directly (only through [], map, or ?)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnknownStructType, compile(&rt,
+        \\type Node struct { value int, next Node }
+    ));
+}
+
+test "compiler: a struct can reference its own type through a nullable (?) field, same as array or map" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Node struct { value int, next ?Node }
+        \\func f() int {
+        \\    n2 := Node{ value: 20, next: null }
+        \\    n1 := Node{ value: 10, next: n2 }
+        \\    if n1.next != null {
+        \\        return n1.next.value
+        \\    }
+        \\    return -1
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 20), (try rt.callGlobal("f", &.{})).int);
+}
+
+// checkStructFieldType has no dedicated handling for .interface_t at all (it
+// falls into the switch's `else => {}` branch, unconditionally allowed) —
+// no existing test types a struct FIELD (as opposed to a function
+// parameter, which is well covered) as an interface.
+test "compiler: a struct field typed as an interface dispatches to whatever concrete value it holds" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Shape interface { area() int }
+        \\type Square struct { side int }
+        \\func (s Square) area() int { return s.side * s.side }
+        \\type Container struct { shape Shape }
+        \\func f() int {
+        \\    c := Container{ shape: Square{ side: 4 } }
+        \\    return c.shape.area()
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 16), (try rt.callGlobal("f", &.{})).int);
+}
+
+// Generic STRUCT and generic FUNC constraints already had tests; nothing
+// instantiated a generic VARIANT with a constrained type parameter.
+test "compiler: constrained generic variant type parameter instantiates when the arg satisfies the constraint" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Boxed[T numeric] variant { ok(v T), bad }
+        \\func f() int {
+        \\    b := Boxed[int].ok(42)
+        \\    switch b {
+        \\        case .ok as v { return v }
+        \\        case .bad { return -1 }
+        \\    }
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 42), (try rt.callGlobal("f", &.{})).int);
+}
+
+test "compiler: constrained generic variant type parameter rejects a non-conforming type arg" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.ConstraintViolation, compile(&rt,
+        \\type Boxed[T numeric] variant { ok(v T), bad }
+        \\func f() {
+        \\    b := Boxed[string].ok("x")
+        \\}
+    ));
+}
+
+// namedTypeDecl's kind dispatch rejects a bracketed type-parameter list
+// before the 'interface' keyword outright; nothing exercised this (as
+// opposed to the already-covered generic-struct/generic-variant paths).
+test "compiler: a generic interface declaration is a compile error (not yet supported)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnexpectedToken, compile(&rt,
+        \\type Foo[T] interface { get() T }
+    ));
+}
+
+// The generic-instantiation-alias path (`type Alias Base[args]`) rejects
+// args that still contain a type parameter — only reachable from inside a
+// generic function or generic struct/method body, where a bare type
+// parameter name resolves to a .type_param alt instead of a concrete type.
+test "compiler: a generic type alias cannot be instantiated with a type parameter as its argument" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnexpectedToken, compile(&rt,
+        \\type Stack[T] struct { items []T }
+        \\func f[T](x T) int {
+        \\    type Local Stack[T]
+        \\    return 0
+        \\}
+    ));
+}
+
+test "compiler: an enum with a duplicate explicit representation value is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateField, compile(&rt,
+        \\type Flags enum { a = 1, b = 1 }
+    ));
+}
+
+test "compiler: an enum explicit representation value outside i64 range is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.BadNumber, compile(&rt,
+        \\type Big enum { a = 1e300 }
+    ));
+}
+
+// namedTypeDecl's own bare-`array`-keyword rejection ("use '[]T' syntax for
+// array types") is a distinct call site from parseFieldTypeSpec's copy of
+// the same message (tests/spec/fail/099_bare_array_type.gengo covers only
+// the latter, via `var x array = ...`).
+test "compiler: 'type X array' (bare keyword, no []) is a compile error distinct from the var-decl case" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnexpectedToken, compile(&rt, "type X array"));
+}
+
+// isKnownConstraint's failure path ("unknown constraint '{s}'") had no test
+// at either of its two call sites: a generic function's type parameter list
+// and a generic type's (struct/variant) type parameter list.
+test "compiler: an unrecognized constraint name on a generic function's type parameter is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnexpectedToken, compile(&rt,
+        \\func f[T bogus](x T) T { return x }
+    ));
+}
+
+test "compiler: an unrecognized constraint name on a generic struct's type parameter is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnexpectedToken, compile(&rt,
+        \\type Box[T bogus] struct { val T }
+    ));
+}

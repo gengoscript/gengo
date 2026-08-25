@@ -260,6 +260,48 @@ pub fn nativeConvToString(ctx: VMContext, v: Value) !Value {
         .object => |o| {
             if (o.* == .bigint) return vmbigint.toDynString(ctx, .{ .object = o });
             if (o.* == .named_error_value) return vmgc.makeDynString(ctx, o.named_error_value.msg.bytes);
+            // A variant arm carrying a string/float/object payload can't be
+            // represented as an .inline_variant (see tryMakeInlineVariant,
+            // which returns null for exactly those payload kinds) and is
+            // instead a heap-allocated .variant_value object — this mirrors
+            // the .inline_variant branch below (same "Type.arm"/"Type.arm(payload)"
+            // format) for that heap representation, which this switch
+            // previously had no case for at all: it fell through to
+            // stringBytesFromObj and raised a spurious TypeError for any
+            // non-record-style variant value with a non-inlineable payload
+            // (e.g. `string(Shape.tag("hi"))` for `tag(label string)`).
+            // Record-style arms (arm_fields.len != 0, e.g. `circle { radius float }`)
+            // have no scalar representation here yet and still fall through
+            // to the TypeError below, unchanged from prior behavior.
+            if (o.* == .variant_value and o.variant_value.arm_fields.len == 0) {
+                const vv = o.variant_value;
+                var buf: [1024]u8 = undefined;
+                var pos: usize = 0;
+                const tn = vv.typ.variant_type.name;
+                if (pos + tn.len > buf.len) return error.RangeError;
+                @memcpy(buf[pos..][0..tn.len], tn);
+                pos += tn.len;
+                if (pos >= buf.len) return error.RangeError;
+                buf[pos] = '.';
+                pos += 1;
+                if (pos + vv.tag.len > buf.len) return error.RangeError;
+                @memcpy(buf[pos..][0..vv.tag.len], vv.tag);
+                pos += vv.tag.len;
+                if (vv.payload != .null) {
+                    const inner_v = try nativeConvToString(ctx, vv.payload);
+                    const inner_s = try vms.asStringValue(inner_v);
+                    if (pos >= buf.len) return error.RangeError;
+                    buf[pos] = '(';
+                    pos += 1;
+                    if (pos + inner_s.len > buf.len) return error.RangeError;
+                    @memcpy(buf[pos..][0..inner_s.len], inner_s);
+                    pos += inner_s.len;
+                    if (pos >= buf.len) return error.RangeError;
+                    buf[pos] = ')';
+                    pos += 1;
+                }
+                return vmgc.makeDynString(ctx, buf[0..pos]);
+            }
             return vmgc.makeDynString(ctx, try vmstr.stringBytesFromObj(o));
         },
         .boolean => |b| vmgc.makeDynString(ctx, if (b) "true" else "false"),
