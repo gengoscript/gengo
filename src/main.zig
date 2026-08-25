@@ -284,7 +284,14 @@ fn parseHeapSize(s: []const u8) usize {
     };
     const digits = if (multiplier != 1) s[0 .. s.len - 1] else s;
     const n = std.fmt.parseUnsigned(usize, digits, 10) catch return 0;
-    return n * multiplier;
+    // A user-supplied --heap value with enough digits (e.g. a stray extra
+    // zero or two on "999999999999999999g") can overflow usize once
+    // multiplied by the 1Gi multiplier -- a bare `*` traps in Debug/
+    // ReleaseSafe (this CLI's own build mode) and silently wraps in
+    // ReleaseFast, either way turning a malformed flag value into a crash
+    // or a wildly wrong heap size instead of the same "invalid input"
+    // signal this function already gives a non-numeric value.
+    return std.math.mul(usize, n, multiplier) catch 0;
 }
 
 // Splits a --net-listen-allow/--net-dial-allow value into (pattern, port). Bracketed form
@@ -1310,6 +1317,21 @@ test "parseHeapSize returns 0 for empty, non-numeric, or suffix-only input" {
     try std.testing.expectEqual(@as(usize, 0), parseHeapSize("4mb")); // trailing garbage after the suffix
 }
 
+// Regression: `n * multiplier` used to be a bare multiplication with no
+// overflow guard -- a --heap value with enough digits before a k/m/g
+// suffix (e.g. std.math.maxInt(usize) itself, or anything within a
+// factor of 1Gi of it) overflows usize once multiplied by the suffix's
+// multiplier. A bare `*` traps in Debug/ReleaseSafe (this CLI's own build
+// mode) rather than returning the same "invalid input" signal a
+// non-numeric value already gets. Fixed via std.math.mul's checked
+// multiplication, returning 0 on overflow just like every other rejected
+// input this function already handles.
+test "parseHeapSize returns 0 instead of trapping when n * multiplier overflows usize" {
+    var buf: [32]u8 = undefined;
+    const huge = std.fmt.bufPrint(&buf, "{d}g", .{std.math.maxInt(usize)}) catch unreachable;
+    try std.testing.expectEqual(@as(usize, 0), parseHeapSize(huge));
+}
+
 // Coverage gap audit (2026-08-19): splitPatternPort backs both
 // --net-listen-allow and --net-dial-allow (added this session) and had
 // zero test coverage of its own — worth checking carefully since it was
@@ -1368,4 +1390,208 @@ test "runtime error block includes location and caret" {
     try std.testing.expect(std.mem.indexOf(u8, got, "  --> repl:1:3") != null);
     try std.testing.expect(std.mem.indexOf(u8, got, "   1 | x += 1.5") != null);
     try std.testing.expect(std.mem.indexOf(u8, got, "     |   ^") != null);
+}
+
+// Coverage gap audit (2026-08-25): rootNameFromPath backs bundle root naming
+// (see runBundle's positional-folder handling) and had zero direct test
+// coverage. It intentionally does NOT strip a trailing extension (e.g.
+// ".gengo") -- it only isolates the final path component, same contract as
+// POSIX basename(3) but also accepting '\\' as a separator for Windows
+// paths, and with defined (non-crashing) behavior on "" and "/".
+test "rootNameFromPath isolates the final path component" {
+    try std.testing.expectEqualStrings("foo.gengo", rootNameFromPath("foo.gengo"));
+    try std.testing.expectEqualStrings("foo.gengo", rootNameFromPath("a/b/foo.gengo"));
+    try std.testing.expectEqualStrings("foo.gengo", rootNameFromPath("a\\b\\foo.gengo"));
+    try std.testing.expectEqualStrings("foo", rootNameFromPath("foo"));
+}
+
+test "rootNameFromPath strips trailing separators before taking the basename" {
+    try std.testing.expectEqualStrings("b", rootNameFromPath("a/b/"));
+    try std.testing.expectEqualStrings("b", rootNameFromPath("a/b///"));
+}
+
+test "rootNameFromPath handles empty and separator-only input without crashing" {
+    try std.testing.expectEqualStrings("", rootNameFromPath(""));
+    // Trims to end == 0, at which point the function returns the original
+    // (untrimmed) slice rather than an empty one -- documenting the actual
+    // behavior here since it's an easy off-by-one to get wrong.
+    try std.testing.expectEqualStrings("/", rootNameFromPath("/"));
+}
+
+// Coverage gap audit (2026-08-25): printSourceLine backs every runtime-error
+// and compile-error report; only its single-line, col>0 path had a test
+// (via printRuntimeErrorBlock's existing test). These cover the remaining
+// branches: multi-line source (line > 1), an out-of-range line (prints
+// nothing), and col == 0 (no caret row at all).
+test "printSourceLine finds the requested line in a multi-line source" {
+    io.setWriteOverrides(testCaptureWrite, testCaptureWrite);
+    defer io.clearWriteOverrides();
+
+    test_capture_len = 0;
+    printSourceLine("first\nsecond\nthird", 2, 3);
+
+    const got = test_capture_buf[0..test_capture_len];
+    try std.testing.expect(std.mem.indexOf(u8, got, "   2 | second") != null);
+    try std.testing.expect(std.mem.indexOf(u8, got, "^") != null);
+}
+
+test "printSourceLine prints nothing when the line is out of range" {
+    io.setWriteOverrides(testCaptureWrite, testCaptureWrite);
+    defer io.clearWriteOverrides();
+
+    test_capture_len = 0;
+    printSourceLine("only one line", 5, 1);
+
+    try std.testing.expectEqual(@as(usize, 0), test_capture_len);
+}
+
+test "printSourceLine omits the caret row when col is 0" {
+    io.setWriteOverrides(testCaptureWrite, testCaptureWrite);
+    defer io.clearWriteOverrides();
+
+    test_capture_len = 0;
+    printSourceLine("x += 1.5", 1, 0);
+
+    const got = test_capture_buf[0..test_capture_len];
+    try std.testing.expectEqualStrings("   1 | x += 1.5\n", got);
+}
+
+// Caret alignment is purely byte-offset-based: leading "   " (3) + one
+// space per digit of the line number + " | " (3) + one space per column
+// before the target + "^". Computed here rather than hand-counted so the
+// test doesn't just re-encode the same off-by-one a bug would introduce.
+test "printSourceLine aligns the caret under multi-digit line numbers" {
+    io.setWriteOverrides(testCaptureWrite, testCaptureWrite);
+    defer io.clearWriteOverrides();
+
+    const src = "a\n" ** 9 ++ "target";
+    const line: u32 = 10;
+    const col: u32 = 3;
+    var digit_count: usize = 0;
+    var tmp = line;
+    while (tmp > 0) : (tmp /= 10) digit_count += 1;
+
+    test_capture_len = 0;
+    printSourceLine(src, line, col);
+
+    const got = test_capture_buf[0..test_capture_len];
+    try std.testing.expect(std.mem.indexOf(u8, got, "10 | target") != null);
+
+    const caret_pos = std.mem.lastIndexOfScalar(u8, got, '^').?;
+    const line_start = if (std.mem.lastIndexOfScalar(u8, got[0..caret_pos], '\n')) |nl| nl + 1 else 0;
+    try std.testing.expectEqual(3 + digit_count + 3 + (col - 1), caret_pos - line_start);
+}
+
+// Coverage gap audit (2026-08-25): the existing printRuntimeErrorBlock test
+// only exercises col != 0 with a non-empty msg. These cover the remaining
+// combinations: col == 0 (no ":col" in the location line, no caret row) and
+// an empty msg (no ": " + msg suffix after the error name).
+test "printRuntimeErrorBlock omits column and caret when col is 0" {
+    io.setWriteOverrides(testCaptureWrite, testCaptureWrite);
+    defer io.clearWriteOverrides();
+
+    test_capture_len = 0;
+    printRuntimeErrorBlock("error: ", "script.gengo", "a\nb\nc", error.RuntimeError, 2, 0, "");
+
+    const got = test_capture_buf[0..test_capture_len];
+    try std.testing.expect(std.mem.indexOf(u8, got, "error: RuntimeError\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, got, "  --> script.gengo:2\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, got, "   2 | b") != null);
+    try std.testing.expect(std.mem.indexOf(u8, got, "^") == null);
+}
+
+test "printRuntimeErrorBlock reports a line other than the first" {
+    io.setWriteOverrides(testCaptureWrite, testCaptureWrite);
+    defer io.clearWriteOverrides();
+
+    test_capture_len = 0;
+    printRuntimeErrorBlock("error: ", "multi.gengo", "one\ntwo\nthree", error.IndexOutOfRange, 3, 2, "out of bounds");
+
+    const got = test_capture_buf[0..test_capture_len];
+    try std.testing.expect(std.mem.indexOf(u8, got, "  --> multi.gengo:3:2\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, got, "   3 | three") != null);
+}
+
+// Coverage gap audit (2026-08-25): readSource had zero direct test coverage
+// of its file-path branch (readSource(null, ...) reads stdin, which is out
+// of scope here -- see main_test's skip notes). These cover the real file
+// path: normal read, the exact-buffer-size boundary (total == buf.len with
+// no more data, so no InputTooLong), the InputTooLong overflow error, and a
+// nonexistent path.
+test "readSource reads a real file's contents into buf" {
+    const io_ctx = std.Io.Threaded.global_single_threaded.io();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const content = "pub func main() int { return 0 }";
+    try tmp.dir.writeFile(io_ctx, .{ .sub_path = "prog.gengo", .data = content });
+    const tmp_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/prog.gengo", .{tmp.sub_path});
+    defer std.testing.allocator.free(tmp_path);
+
+    var buf: [256]u8 = undefined;
+    const n = try readSource(tmp_path, &buf);
+    try std.testing.expectEqualStrings(content, buf[0..n]);
+}
+
+test "readSource succeeds when the file exactly fills the buffer" {
+    const io_ctx = std.Io.Threaded.global_single_threaded.io();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const content = "0123456789";
+    try tmp.dir.writeFile(io_ctx, .{ .sub_path = "exact.gengo", .data = content });
+    const tmp_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/exact.gengo", .{tmp.sub_path});
+    defer std.testing.allocator.free(tmp_path);
+
+    var buf: [10]u8 = undefined;
+    const n = try readSource(tmp_path, &buf);
+    try std.testing.expectEqual(@as(usize, 10), n);
+    try std.testing.expectEqualStrings(content, buf[0..n]);
+}
+
+test "readSource returns InputTooLong when the file exceeds the buffer" {
+    const io_ctx = std.Io.Threaded.global_single_threaded.io();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io_ctx, .{ .sub_path = "big.gengo", .data = "this is more than four bytes" });
+    const tmp_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/big.gengo", .{tmp.sub_path});
+    defer std.testing.allocator.free(tmp_path);
+
+    var buf: [4]u8 = undefined;
+    try std.testing.expectError(error.InputTooLong, readSource(tmp_path, &buf));
+}
+
+test "readSource returns an error for a nonexistent path" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectError(error.FileNotFound, readSource("this/path/does/not/exist.gengo", &buf));
+}
+
+// stdinIsTerminal is a thin ioctl wrapper; the only thing safely assertable
+// in a non-interactive test run is that it returns without crashing (fd 0
+// under the test harness is never a tty, but this doesn't hardcode that
+// assumption since it would be environment-dependent).
+test "stdinIsTerminal returns without crashing" {
+    _ = stdinIsTerminal();
+}
+
+// Coverage gap audit (2026-08-25): splitPatternPort's bracketed-input branch
+// only had well-formed cases under test. These cover malformed/edge bracket
+// syntax: an unclosed '[' (falls through to the unbracketed path, which
+// then also declines to split since there's no lone ':'), an empty
+// bracketed pattern with a port, and a bracketed pattern whose port suffix
+// fails to parse (silently becomes 0, matching parseHeapSize's contract of
+// "invalid input becomes the zero value", not a hard error).
+test "splitPatternPort handles malformed bracket syntax without crashing" {
+    const unclosed = splitPatternPort("[::1");
+    try std.testing.expectEqualStrings("[::1", unclosed.pattern);
+    try std.testing.expectEqual(@as(u16, 0), unclosed.port);
+
+    const empty_pattern = splitPatternPort("[]:80");
+    try std.testing.expectEqualStrings("", empty_pattern.pattern);
+    try std.testing.expectEqual(@as(u16, 80), empty_pattern.port);
+
+    const bad_port = splitPatternPort("[::1]:notaport");
+    try std.testing.expectEqualStrings("::1", bad_port.pattern);
+    try std.testing.expectEqual(@as(u16, 0), bad_port.port);
 }

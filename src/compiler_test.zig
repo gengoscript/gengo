@@ -13545,3 +13545,131 @@ test "compiler: an unrecognized constraint name on a generic struct's type param
         \\type Box[T bogus] struct { val T }
     ));
 }
+
+// ── Fourth coverage pass: closure/upvalue sharing, tail-call recursion
+// depth, and per-call interface dispatch ──
+//
+// Targets three specific vm.zig gaps left after three prior passes: (1)
+// close_upvalue/make_closure's core "closures share, don't copy, their
+// captured environment" correctness property when TWO closures are made
+// from the SAME enclosing call and capture the SAME local; (2) call_tail's
+// frame-reuse actually preventing a CallStackOverflow on deep self-
+// recursion, as a dedicated test rather than an incidental byproduct of a
+// max_frames test; (3) invoke_method's inline cache (vm.zig's
+// ic_type_idx/ic_func_idx patched bytes) correctly re-resolving per call
+// when the same interface-typed call site sees different concrete struct
+// types across separate invocations, rather than trusting a stale cached
+// (type, func) pair from the first call it ever saw.
+
+test "compiler: two closures made from the same call, capturing the same local, share one mutable upvalue cell" {
+    // inc() and get() are both created inside a single makeCounterPair()
+    // call and both capture `x`. make_closure's capture-slot loop (vm.zig)
+    // must turn `x`'s stack slot into a shared heap `cell` object the FIRST
+    // time either closure captures it, and the second closure capturing the
+    // same slot must reuse that same cell (the `cur.object.* == .cell`
+    // fast path) rather than boxing a fresh copy — otherwise get() would
+    // never observe inc()'s mutations.
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func makeCounterPair() int {
+        \\    x := 0
+        \\    inc := func() int { x = x + 1; return x }
+        \\    get := func() int { return x }
+        \\    a := inc()
+        \\    b := get()
+        \\    c := inc()
+        \\    d := get()
+        \\    return a * 1000 + b * 100 + c * 10 + d
+        \\}
+    );
+    // If the two closures wrongly captured independent copies of x, get()
+    // would always observe 0 and this would evaluate to 1000 + 0 + 10 + 0.
+    try std.testing.expectEqual(@as(i64, 1122), (try rt.callGlobal("makeCounterPair", &.{})).int);
+}
+
+test "compiler: deep self-recursive tail calls do not overflow the call-frame stack (call_tail reuses the caller's frame)" {
+    // setup() uses vms.MaxFrames, which resolves to the "1m" preset's
+    // max_frames = 64 (src/runtime/config_1m.zig) — the default build
+    // preset used by `zig build compiler-test`. 50,000 levels of ordinary
+    // (non-tail) recursion would blow through 64 available frames almost
+    // immediately (error.CallStackOverflow); this only succeeds if
+    // `return countDown(n - 1)` really does compile to call_tail and
+    // call_tail's tryTailCall really does reuse the current frame instead
+    // of pushing a new one, as documented at vm.zig's .call_tail handler
+    // and proven incidentally by the max_frames test above this one.
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func countDown(n int) int {
+        \\    if n <= 0 { return 0 }
+        \\    return countDown(n - 1)
+        \\}
+    );
+    const result = try rt.callGlobal("countDown", &.{.{ .int = 50000 }});
+    try std.testing.expectEqual(@as(i64, 0), result.int);
+}
+
+test "compiler: interface method dispatch re-resolves per call when the same call site sees different concrete struct types across separate invocations" {
+    // describe()'s `sh.name()` is a SINGLE invoke_method bytecode call site,
+    // compiled once. describeCircle() and describeSquare() are two separate
+    // top-level calls into that same describe() body, each passing a
+    // different concrete struct behind the Shape interface parameter.
+    // vm.zig's opInvokeMethod patches an inline cache (ic_type_idx,
+    // ic_func_idx) into that call site's operand bytes after the first
+    // resolution; this proves the IC's `ctx.hs.objectAt(ic_type_idx) ==
+    // inst.typ` (or the small_struct_instance equivalent) guard correctly
+    // detects the type mismatch on the second, different-typed call and
+    // falls back to resolveStructMethod/resolveSmallStructMethod again,
+    // rather than wrongly reusing Circle's cached name() for a Square
+    // receiver (or vice versa, depending on call order).
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Shape interface { name() string }
+        \\type Circle struct { r int }
+        \\func (c Circle) name() string { return "circle" }
+        \\type Square struct { s int }
+        \\func (sq Square) name() string { return "square" }
+        \\func describe(sh Shape) string { return sh.name() }
+        \\func describeCircle() string {
+        \\    c := Circle { r: 5 }
+        \\    return describe(c)
+        \\}
+        \\func describeSquare() string {
+        \\    sq := Square { s: 3 }
+        \\    return describe(sq)
+        \\}
+    );
+    const circle_result = try rt.callGlobal("describeCircle", &.{});
+    try std.testing.expectEqualStrings("circle", circle_result.string.bytes);
+    const square_result = try rt.callGlobal("describeSquare", &.{});
+    try std.testing.expectEqualStrings("square", square_result.string.bytes);
+    // And once more in reverse-first order via a second Runtime to make sure
+    // whichever type happened to populate the IC first, the other type is
+    // still resolved correctly (guards against an order-dependent bug the
+    // above alone couldn't distinguish from "always resolves the SECOND
+    // call correctly no matter what").
+    var rt2 = try setup();
+    defer rt2.deinit();
+    try runSrc(&rt2,
+        \\type Shape interface { name() string }
+        \\type Circle struct { r int }
+        \\func (c Circle) name() string { return "circle" }
+        \\type Square struct { s int }
+        \\func (sq Square) name() string { return "square" }
+        \\func describe(sh Shape) string { return sh.name() }
+        \\func describeSquare() string {
+        \\    sq := Square { s: 3 }
+        \\    return describe(sq)
+        \\}
+        \\func describeCircle() string {
+        \\    c := Circle { r: 5 }
+        \\    return describe(c)
+        \\}
+    );
+    const square_result2 = try rt2.callGlobal("describeSquare", &.{});
+    try std.testing.expectEqualStrings("square", square_result2.string.bytes);
+    const circle_result2 = try rt2.callGlobal("describeCircle", &.{});
+    try std.testing.expectEqualStrings("circle", circle_result2.string.bytes);
+}
