@@ -15894,3 +15894,447 @@ test "compiler: a string literal with a non-hex '\\x' escape is a compile error 
     try std.testing.expectEqual(error.BadEscape, r.err);
     try std.testing.expect(std.mem.indexOf(u8, r.msg, "bad escape sequence") != null);
 }
+
+// ── core.zig (native/core.zig) coverage sweep (2026-08-25) ─────────────────
+//
+// core.zig sat at 82.75% line coverage with zero inline `test` blocks of its
+// own -- every line is only reachable via black-box Gengo scripts run
+// through a real Runtime. This sweep targets its largest remaining gaps.
+//
+// std.core.append/bytelen/len (like std.math's abs/sqrt/etc, see the
+// "intrinsic-shadowed" test above) lower UNCONDITIONALLY at their direct
+// call site to the .append/.bytelen/.len ops (selectStdCoreAppendIntrinsicOp/
+// selectStdCoreByteLenIntrinsicOp/selectStdCoreLenIntrinsicOp in
+// compiler.zig) -- and those ops' VM handlers call the exact same
+// nativeAppend/nativeByteLen/nativeLen core.zig functions, so ordinary
+// `std.core.len(x)`-shaped tests already cover those three functions'
+// bodies. What NONE of those tests ever reach is core.zig's own dispatch()
+// switch (the .core_append/.core_bytelen/.core_len arms), which only runs
+// for a genuinely INDIRECT call -- binding the function to a local first
+// (`f := std.core.append`) defeats the intrinsic recognition, same trick as
+// the std.math sweep.
+test "compiler: std.core.append/bytelen/len reach core.zig's own dispatch() via indirect call" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func viaAppend() []int {
+        \\    f := std.core.append
+        \\    a := [1, 2, 3]
+        \\    return f(a, 4, 5)
+        \\}
+        \\func viaByteLen() int {
+        \\    g := std.core.bytelen
+        \\    return g("hello")
+        \\}
+        \\func viaLen() int {
+        \\    h := std.core.len
+        \\    return h([1, 2, 3, 4])
+        \\}
+    );
+    const appended = try rt.callGlobal("viaAppend", &.{});
+    const items = try vms.asArraySlice(appended.object);
+    try std.testing.expectEqual(@as(usize, 5), items.len);
+    try std.testing.expectEqual(@as(i64, 4), items[3].int);
+    try std.testing.expectEqual(@as(i64, 5), items[4].int);
+    try std.testing.expectEqual(@as(i64, 5), (try rt.callGlobal("viaByteLen", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 4), (try rt.callGlobal("viaLen", &.{})).int);
+}
+
+// nativeConvToInt/nativeConvToFloat's rune/boolean/TypeError-fallthrough
+// branches: selectStdConvIntrinsicOp only folds a DIRECT std.conv.to_int/
+// to_float call to cast_int/cast_float when the argument's STATIC type is
+// provably int/float/rune/bool -- gating that itself proves those branches
+// unreachable via a direct call with a statically-known-safe argument.
+// Binding to_int/to_float to a local first defeats that static check
+// entirely (same indirect-call trick as above), forcing every call through
+// nativeConvToInt/nativeConvToFloat's real bodies regardless of argument
+// kind, including the final `else => TypeError` fallthrough (null has no
+// int/float/rune/bool/string/object case in either function).
+test "compiler: std.conv.to_int/to_float reach nativeConvToInt/Float's rune/bool/TypeError branches via indirect call" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func intFromRune() int { f := std.conv.to_int; return f(`A`) }
+        \\func intFromBoolTrue() int { f := std.conv.to_int; return f(true) }
+        \\func intFromBoolFalse() int { f := std.conv.to_int; return f(false) }
+        \\func intFromNullErrors() int { f := std.conv.to_int; return f(null) }
+        \\func floatFromInt() float { g := std.conv.to_float; return g(5) }
+        \\func floatFromFloat() float { g := std.conv.to_float; return g(5.5) }
+        \\func floatFromRune() float { g := std.conv.to_float; return g(`A`) }
+        \\func floatFromBool() float { g := std.conv.to_float; return g(true) }
+        \\func floatFromNullErrors() float { g := std.conv.to_float; return g(null) }
+    );
+    try std.testing.expectEqual(@as(i64, 65), (try rt.callGlobal("intFromRune", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 1), (try rt.callGlobal("intFromBoolTrue", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("intFromBoolFalse", &.{})).int);
+    try std.testing.expectError(error.TypeError, rt.callGlobal("intFromNullErrors", &.{}));
+    try std.testing.expectEqual(@as(f64, 5.0), (try rt.callGlobal("floatFromInt", &.{})).float);
+    try std.testing.expectEqual(@as(f64, 5.5), (try rt.callGlobal("floatFromFloat", &.{})).float);
+    try std.testing.expectEqual(@as(f64, 65.0), (try rt.callGlobal("floatFromRune", &.{})).float);
+    try std.testing.expectEqual(@as(f64, 1.0), (try rt.callGlobal("floatFromBool", &.{})).float);
+    try std.testing.expectError(error.TypeError, rt.callGlobal("floatFromNullErrors", &.{}));
+}
+
+// nativeConvToBool's `.actor_ref` case: std.conv.to_bool has no compiler
+// intrinsic at all (unlike to_int/to_float/to_string), so a plain direct
+// call already reaches nativeConvToBool for real -- this just needed an
+// actor_ref value, which only a task/self() context can produce.
+test "compiler: std.conv.to_bool covers the actor_ref case" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Worker task func(start int, reply actor) {}
+        \\liveActor := Worker(1, self())
+        \\liveActorIsTrue := std.conv.to_bool(liveActor)
+        \\func actorRefToBool() bool { return liveActorIsTrue }
+    );
+    try std.testing.expect((try rt.callGlobal("actorRefToBool", &.{})).boolean);
+}
+
+// NOTE (finding, not fixed -- see task report): nativeIsInt/nativeIsFloat's
+// `.object => isNamedBase(ctx, v, .int)` / `(..., .float)` arms (core.zig
+// lines 421/430) appear to be dead code, reachable from no Gengo script at
+// all. isErasedNamedType (compiler.zig) unconditionally erases every named
+// type whose base is int/float/bool/rune/enum_t -- UNCONDITIONALLY, not
+// just when the type has no predicate/range as one might assume from the
+// name. A predicate or range on a named int/float type only adds a runtime
+// *validation* step at construction; the value produced is still a bare
+// .int/.float Value with no .named_value wrapper. Since isNamedBase can
+// only ever fire on a `.object => .named_value` value, and no named type
+// with base .int or .float can ever produce one, isNamedBase(ctx, v, .int)
+// and isNamedBase(ctx, v, .float) can never observe a match. This test
+// instead just pins the (already correct, via the plain `.int`/`.float`
+// fast-path arms) observable behavior for a predicate-bearing named
+// int/float, so a future erasure-policy change that actually exercises
+// isNamedBase's int/float arms doesn't silently flip this test's meaning.
+test "compiler: std.core.is_int/is_float on a predicate-bearing named int/float is still true via the erased fast path" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type PosInt int predicate func(x) { return x > 0 }
+        \\type PosFloat float predicate func(x) { return x > 0.0 }
+        \\func isIntNamed() bool { return std.core.is_int(PosInt(5)) }
+        \\func isFloatNamed() bool { return std.core.is_float(PosFloat(2.5)) }
+        \\func isFloatOnNamedInt() bool { return std.core.is_float(PosInt(5)) }
+        \\func isIntOnNamedFloat() bool { return std.core.is_int(PosFloat(2.5)) }
+    );
+    try std.testing.expect((try rt.callGlobal("isIntNamed", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("isFloatNamed", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("isFloatOnNamedInt", &.{})).boolean);
+    try std.testing.expect(!(try rt.callGlobal("isIntOnNamedFloat", &.{})).boolean);
+}
+
+// nativeLen's `.struct_instance` case and nativeTypeNameValue's own
+// `.struct_instance` case are each a SEPARATE switch arm from
+// `.small_struct_instance` -- SmallStructMaxFields is 4, so a struct
+// literal with 4 or fewer fields (every existing len/type_of-on-a-struct
+// test in this file) always takes the small-struct representation. Only a
+// struct with 5+ fields uses the real (heap-allocated fields slice)
+// `.struct_instance` representation these two branches need.
+test "compiler: std.core.len/type_of on a struct with more than 4 fields reach the real (non-small) struct_instance branches" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Big struct { a int, b int, c int, d int, e int }
+        \\func bigLen() int { return std.core.len(Big{a: 1, b: 2, c: 3, d: 4, e: 5}) }
+        \\func bigTypeOf() string {
+        \\    t := std.core.type_of
+        \\    return t(Big{a: 1, b: 2, c: 3, d: 4, e: 5})
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 5), (try rt.callGlobal("bigLen", &.{})).int);
+    try std.testing.expectEqualStrings("Big", try vms.asStringValue(try rt.callGlobal("bigTypeOf", &.{})));
+}
+
+// nativeConvToString's own `vmod.decimalRawAndScale` branch: cast_string's
+// VM op (which `string(...)` always compiles to) special-cases decimal
+// itself BEFORE ever calling nativeConvToString, so `string(someDecimal)`
+// never reaches core.zig's own decimal handling at all. std.conv.to_string
+// folds to cast_string too (selectStdConvIntrinsicOp, unconditionally for
+// any provably-non-null prim) -- so only an INDIRECT std.conv.to_string
+// call, on a decimal value, reaches nativeConvToString's decimal branch for
+// real.
+//
+// nativeConvToString's `.inline_variant` case with a non-null payload
+// (building "Type.arm(payload)") is a SEPARATE representation from a
+// string/float/object payload, which tryMakeInlineVariant can never inline
+// (see the .variant_value fix earlier this session) -- an INT payload,
+// which fits inline, is required to reach it. `string(...)` (a direct cast,
+// no intrinsic folding involved) exercises this directly.
+test "compiler: std.conv.to_string reaches nativeConvToString's decimal branch via indirect call, and string(...) reaches its inline_variant-with-payload branch" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Money decimal 2
+        \\type Shape variant { tag(n int), point }
+        \\func decimalViaIndirectToString() string {
+        \\    var d Money = 3.5
+        \\    h := std.conv.to_string
+        \\    return h(d)
+        \\}
+        \\func inlineVariantWithIntPayloadToString() string { return string(Shape.tag(42)) }
+    );
+    try std.testing.expectEqualStrings("3.5", try vms.asStringValue(try rt.callGlobal("decimalViaIndirectToString", &.{})));
+    try std.testing.expectEqualStrings("Shape.tag(42)", try vms.asStringValue(try rt.callGlobal("inlineVariantWithIntPayloadToString", &.{})));
+}
+
+// nativeTypeNameValue (backing std.core.type_of) has its OWN compile-time
+// short-circuit for a DIRECT call: selectStdCoreLenIntrinsicOp's sibling in
+// compiler_expr.zig folds `std.core.type_of(x)` straight to a compile-time
+// string constant whenever the compiler can statically name x's type (this
+// applies far more broadly than plain `type X int` named values -- a bare
+// reference to a struct/interface/enum/variant/named-error/task TYPE itself
+// also folds, confirmed via disasm: `std.core.type_of(SomeStruct)` compiles
+// with no runtime call to std.core.type_of at all). Binding type_of to a
+// local first defeats that folding unconditionally (same indirect-call
+// trick used throughout this sweep), forcing every one of these through
+// nativeTypeNameValue's real switch: rune, map, native_function, and bare
+// struct/interface/named/enum/variant/variant-ctor/named-error/task type
+// references, plus actor_ref.
+test "compiler: std.core.type_of via indirect call reaches nativeTypeNameValue's rune/map/native_function/type-object/actor_ref branches" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Square struct { side int }
+        \\type Shape interface { area() int }
+        \\type Meter int
+        \\type Color enum { red, green, blue }
+        \\type Boxed variant { ok(v int), bad }
+        \\type MyErr error
+        \\type Worker task func(start int, reply actor) {}
+        \\func typeOfRune() string { t := std.core.type_of; return t(`x`) }
+        \\func typeOfMap() string { t := std.core.type_of; return t({"a": 1}) }
+        \\func typeOfNativeFunction() string { t := std.core.type_of; f := std.core.len; return t(f) }
+        \\func typeOfStructType() string { t := std.core.type_of; return t(Square) }
+        \\func typeOfInterfaceType() string { t := std.core.type_of; return t(Shape) }
+        \\func typeOfNamedType() string { t := std.core.type_of; return t(Meter) }
+        \\func typeOfEnumType() string { t := std.core.type_of; return t(Color) }
+        \\func typeOfVariantType() string { t := std.core.type_of; return t(Boxed) }
+        \\func typeOfVariantCtor() string { t := std.core.type_of; ctor := Boxed.ok; return t(ctor) }
+        \\func typeOfNamedErrorType() string { t := std.core.type_of; return t(MyErr) }
+        \\func typeOfTaskType() string { t := std.core.type_of; return t(Worker) }
+        \\t := std.core.type_of
+        \\a := Worker(1, self())
+        \\actorRefTypeOfResult := t(a)
+        \\func typeOfActorRef() string { return actorRefTypeOfResult }
+    );
+    try std.testing.expectEqualStrings("rune", try vms.asStringValue(try rt.callGlobal("typeOfRune", &.{})));
+    try std.testing.expectEqualStrings("map", try vms.asStringValue(try rt.callGlobal("typeOfMap", &.{})));
+    try std.testing.expectEqualStrings("native_func", try vms.asStringValue(try rt.callGlobal("typeOfNativeFunction", &.{})));
+    try std.testing.expectEqualStrings("Square", try vms.asStringValue(try rt.callGlobal("typeOfStructType", &.{})));
+    try std.testing.expectEqualStrings("Shape", try vms.asStringValue(try rt.callGlobal("typeOfInterfaceType", &.{})));
+    try std.testing.expectEqualStrings("Meter", try vms.asStringValue(try rt.callGlobal("typeOfNamedType", &.{})));
+    try std.testing.expectEqualStrings("Color", try vms.asStringValue(try rt.callGlobal("typeOfEnumType", &.{})));
+    try std.testing.expectEqualStrings("Boxed", try vms.asStringValue(try rt.callGlobal("typeOfVariantType", &.{})));
+    try std.testing.expectEqualStrings("Boxed", try vms.asStringValue(try rt.callGlobal("typeOfVariantCtor", &.{})));
+    try std.testing.expectEqualStrings("MyErr", try vms.asStringValue(try rt.callGlobal("typeOfNamedErrorType", &.{})));
+    try std.testing.expectEqualStrings("Worker", try vms.asStringValue(try rt.callGlobal("typeOfTaskType", &.{})));
+    try std.testing.expectEqualStrings("actor", try vms.asStringValue(try rt.callGlobal("typeOfActorRef", &.{})));
+}
+
+// deepEqualObject/deepEqualValue's rarer branches: every one of these kinds
+// (string_view, a bare closure, native_function, the type-object identity
+// kinds, enum_value, a >4-field struct_instance, a record-style variant_value,
+// named_type_fn/enum_type_fn, string_builder, bigint, error_value,
+// inline_variant with a payload, named_error_value, task_type, decimal
+// nested inside a named_value, and a cross string/string_view comparison)
+// was previously unexercised by std.core.deep_equal anywhere in this file
+// (existing usage is overwhelmingly array/map/struct/string content
+// comparisons). std.core.deep_equal has no compiler intrinsic at all, so
+// direct calls already reach core.zig's real deepEqualValue/deepEqualObject.
+test "compiler: std.core.deep_equal covers its rarer object/value-kind branches" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Square struct { side int }
+        \\type Shape interface { area() int }
+        \\type Color enum { red, green, blue }
+        \\type Boxed variant { ok(v int), bad }
+        \\type MyErr error
+        \\type Worker task func(start int, reply actor) {}
+        \\type Big struct { a int, b int, c int, d int, e int }
+        \\type ShapeV variant { circle { radius float, label string }, tag(n int), point }
+        \\type SharedV variant { id int, circle { radius float }, point }
+        \\type RangedM int range 0..100
+        \\type Money decimal 2
+        \\type Rect struct { w int, h int }
+        \\type Named interface { name() string }
+        \\type Wrapped variant { some(v int), none }
+        \\type Runner task func(start int, reply actor) {}
+        \\worker1 := Worker(1, self())
+        \\worker2 := Worker(2, self())
+        \\func actorRefEq() bool {
+        \\    return std.core.deep_equal(worker1, worker1) and not std.core.deep_equal(worker1, worker2)
+        \\}
+        \\func stringViewEq() bool {
+        \\    sv1 := std.bytes.slice(std.conv.to_string(12345), 1, 3)
+        \\    sv2 := std.bytes.slice(std.conv.to_string(99123), 1, 3)
+        \\    sv3 := std.bytes.slice(std.conv.to_string(12345), 1, 3)
+        \\    return not std.core.deep_equal(sv1, sv2) and std.core.deep_equal(sv1, sv3)
+        \\}
+        \\func stringVsStringViewEq() bool {
+        \\    sv := std.bytes.slice(std.conv.to_string(12345), 1, 3)
+        \\    return std.core.deep_equal("23", sv) and std.core.deep_equal(sv, "23")
+        \\}
+        \\func closureIdentityEq() bool {
+        \\    fn := func() int { return 1 }
+        \\    fn2 := func() int { return 1 }
+        \\    return std.core.deep_equal(fn, fn) and not std.core.deep_equal(fn, fn2)
+        \\}
+        \\func nativeFunctionEq() bool {
+        \\    f := std.core.len
+        \\    h := std.core.len
+        \\    g := std.core.append
+        \\    return std.core.deep_equal(f, h) and not std.core.deep_equal(f, g)
+        \\}
+        \\func typeObjectIdentityEq() bool {
+        \\    // Comparing a type to ITSELF (e.g. deep_equal(Square, Square)) always
+        \\    // takes deepEqualObject's `a == b` pointer-identity fast path (every
+        \\    // reference to a given declared type resolves to the same singleton
+        \\    // object) and never reaches the per-kind qualified_name comparison
+        \\    // below it -- comparing two DISTINCT same-tag type objects is required
+        \\    // to actually exercise struct_type/interface_type/variant_ctor/
+        \\    // task_type's own comparison lines.
+        \\    ctor1 := Boxed.ok
+        \\    ctor2 := Wrapped.some
+        \\    return not std.core.deep_equal(Square, Rect) and not std.core.deep_equal(Shape, Named) and
+        \\        not std.core.deep_equal(ctor1, ctor2) and not std.core.deep_equal(Worker, Runner) and
+        \\        std.core.deep_equal(Color, Color) and std.core.deep_equal(MyErr, MyErr)
+        \\}
+        \\func runeValueEq() bool {
+        \\    return std.core.deep_equal(`x`, `x`) and not std.core.deep_equal(`x`, `y`)
+        \\}
+        \\func sharedFieldVariantEq() bool {
+        \\    c1 := SharedV.circle{id: 1, radius: 5.0}
+        \\    c2 := SharedV.circle{id: 1, radius: 5.0}
+        \\    c3 := SharedV.circle{id: 2, radius: 5.0}
+        \\    return std.core.deep_equal(c1, c2) and not std.core.deep_equal(c1, c3)
+        \\}
+        \\func enumValueEq() bool {
+        \\    return std.core.deep_equal(Color.red, Color.red) and not std.core.deep_equal(Color.red, Color.green)
+        \\}
+        \\func bigStructInstanceEq() bool {
+        \\    p1 := Big{a: 1, b: 2, c: 3, d: 4, e: 5}
+        \\    p2 := Big{a: 1, b: 2, c: 3, d: 4, e: 5}
+        \\    p3 := Big{a: 1, b: 2, c: 3, d: 4, e: 9}
+        \\    return std.core.deep_equal(p1, p2) and not std.core.deep_equal(p1, p3)
+        \\}
+        \\func recordVariantValueEq() bool {
+        \\    c1 := ShapeV.circle{radius: 5.0, label: "x"}
+        \\    c2 := ShapeV.circle{radius: 5.0, label: "x"}
+        \\    c3 := ShapeV.circle{radius: 6.0, label: "x"}
+        \\    return std.core.deep_equal(c1, c2) and not std.core.deep_equal(c1, c3)
+        \\}
+        \\func namedAndEnumTypeFnEq() bool {
+        \\    ntf := RangedM.succ
+        \\    ntf2 := RangedM.succ
+        \\    etf := Color.from_int
+        \\    etf2 := Color.from_int
+        \\    return std.core.deep_equal(ntf, ntf2) and std.core.deep_equal(etf, etf2)
+        \\}
+        \\func stringBuilderEq() bool {
+        \\    b1 := std.string.builder()
+        \\    b1.write("abc")
+        \\    b2 := std.string.builder()
+        \\    b2.write("abc")
+        \\    b3 := std.string.builder()
+        \\    b3.write("xyz")
+        \\    return std.core.deep_equal(b1, b2) and not std.core.deep_equal(b1, b3)
+        \\}
+        \\func bigintEq() bool {
+        \\    return std.core.deep_equal(bigint(5), bigint(5)) and not std.core.deep_equal(bigint(5), bigint(6))
+        \\}
+        \\func errorValueEq() bool {
+        \\    return std.core.deep_equal(std.core.error("x"), std.core.error("x")) and
+        \\        not std.core.deep_equal(std.core.error("x"), std.core.error("y"))
+        \\}
+        \\func inlineVariantWithPayloadEq() bool {
+        \\    return std.core.deep_equal(Boxed.ok(5), Boxed.ok(5)) and not std.core.deep_equal(Boxed.ok(5), Boxed.ok(6))
+        \\}
+        \\func namedErrorValueEq() bool {
+        \\    return std.core.deep_equal(MyErr("x"), MyErr("x")) and not std.core.deep_equal(MyErr("x"), MyErr("y"))
+        \\}
+        \\func decimalNestedInNamedValueEq() bool {
+        \\    var d1 Money = 3.5
+        \\    var d2 Money = 3.5
+        \\    var d3 Money = 4.5
+        \\    return std.core.deep_equal(d1, d2) and not std.core.deep_equal(d1, d3)
+        \\}
+    );
+    try std.testing.expect((try rt.callGlobal("stringViewEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("stringVsStringViewEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("closureIdentityEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("nativeFunctionEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("typeObjectIdentityEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("runeValueEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("sharedFieldVariantEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("actorRefEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("enumValueEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("bigStructInstanceEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("recordVariantValueEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("namedAndEnumTypeFnEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("stringBuilderEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("bigintEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("errorValueEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("inlineVariantWithPayloadEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("namedErrorValueEq", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("decimalNestedInNamedValueEq", &.{})).boolean);
+}
+
+// cloneObject's rarer branches: string_view (a genuinely separate case from
+// dyn_string), a non-empty string_builder (the `sb.len != 0` branch, copying
+// the backing buffer), enum_value, and named_error_value all had no
+// std.core.clone coverage anywhere in this file (the existing clone tests
+// only exercise arrays/maps/structs). The big combined pass-through arm
+// (`.function, .closure, .native_function, ... => return .{ .object = src
+// }`) is exercised via native_function here too.
+test "compiler: std.core.clone covers string_view, non-empty string_builder, enum_value, and named_error_value" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Color enum { red, green, blue }
+        \\type MyErr error
+        \\func cloneStringView() string {
+        \\    sv := std.bytes.slice(std.conv.to_string(12345), 1, 3)
+        \\    return std.core.clone(sv)
+        \\}
+        \\func cloneNonEmptyStringBuilder() string {
+        \\    b := std.string.builder()
+        \\    b.write("abc")
+        \\    c := std.core.clone(b)
+        \\    return c.str()
+        \\}
+        \\func cloneEnumValueRetainsIdentity() bool {
+        \\    c := std.core.clone(Color.red)
+        \\    return std.core.deep_equal(c, Color.red) and not std.core.deep_equal(c, Color.green)
+        \\}
+        \\func cloneNamedErrorValueRetainsMessage() string {
+        \\    c := std.core.clone(MyErr("boom"))
+        \\    return string(c)
+        \\}
+        \\func cloneNativeFunctionPassesThrough() bool {
+        \\    f := std.core.len
+        \\    c := std.core.clone(f)
+        \\    return std.core.deep_equal(c, f)
+        \\}
+        \\func cloneNamedErrorTypeItselfPassesThrough() bool {
+        \\    c := std.core.clone(MyErr)
+        \\    return std.core.deep_equal(c, MyErr)
+        \\}
+    );
+    try std.testing.expectEqualStrings("23", try vms.asStringValue(try rt.callGlobal("cloneStringView", &.{})));
+    try std.testing.expectEqualStrings("abc", try vms.asStringValue(try rt.callGlobal("cloneNonEmptyStringBuilder", &.{})));
+    try std.testing.expect((try rt.callGlobal("cloneEnumValueRetainsIdentity", &.{})).boolean);
+    try std.testing.expectEqualStrings("boom", try vms.asStringValue(try rt.callGlobal("cloneNamedErrorValueRetainsMessage", &.{})));
+    try std.testing.expect((try rt.callGlobal("cloneNativeFunctionPassesThrough", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("cloneNamedErrorTypeItselfPassesThrough", &.{})).boolean);
+}

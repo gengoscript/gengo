@@ -608,7 +608,7 @@ fn valueToWireDepth(val: Value, depth: u32) !ValueWire {
         .object => |obj| switch (obj.*) {
             .dyn_string => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.dyn_string.ptr), try wireLen(obj.dyn_string.len)),
             .string_view => makeWire(@intFromEnum(WireTag.string), @intFromPtr(obj.string_view.bytes.ptr), try wireLen(obj.string_view.bytes.len)),
-            .array, .array_managed, .array_capacity => {
+            .array, .array_managed, .array_view, .array_capacity => {
                 const items = try vms.asArraySlice(obj);
                 const wires = (heap.bump(ValueWire, items.len) orelse return makeWire(@intFromEnum(WireTag.null), 0, 0))[0..items.len];
                 try fillArrayWires(items, wires, depth + 1);
@@ -697,7 +697,7 @@ fn valueToWireWithScratch(val: Value, scratch: *Engine) !ValueWire {
                 const stable = scratch.setStringScratch(s);
                 return makeWire(@intFromEnum(WireTag.string), @intFromPtr(stable.ptr), @intCast(stable.len));
             },
-            .array, .array_managed, .array_capacity => {
+            .array, .array_managed, .array_view, .array_capacity => {
                 const items = try vms.asArraySlice(obj);
                 if (items.len > scratch.wire_elem_buf.len) return error.WireBufferOverflow;
                 const wires = &scratch.wire_elem_buf;
@@ -1498,6 +1498,7 @@ test "engine_add_source rejects path and source exceeding buffer" {
     // Initialize an engine
     const h = engine_init();
     try std.testing.expect(h > 0);
+    defer engine_destroy(h);
 
     // Path exactly at limit should succeed
     const ok_path = "a" ** MaxPath;
@@ -1508,6 +1509,7 @@ test "engine_add_source rejects path and source exceeding buffer" {
     // Path one byte over limit should fail
     const h2 = engine_init();
     try std.testing.expect(h2 > 0);
+    defer engine_destroy(h2);
     const long_path = "a" ** (MaxPath + 1);
     const fail_path = engine_add_source(h2, @intCast(@intFromPtr(long_path.ptr)), @intCast(long_path.len), @intCast(@intFromPtr(ok_src.ptr)), @intCast(ok_src.len));
     try std.testing.expectEqual(-5, fail_path);
@@ -1515,6 +1517,7 @@ test "engine_add_source rejects path and source exceeding buffer" {
     // Source one byte over limit should fail
     const h3 = engine_init();
     try std.testing.expect(h3 > 0);
+    defer engine_destroy(h3);
     const long_src = "b" ** (MaxSource + 1);
     const fail_src = engine_add_source(h3, @intCast(@intFromPtr(ok_path.ptr)), @intCast(ok_path.len), @intCast(@intFromPtr(long_src.ptr)), @intCast(long_src.len));
     try std.testing.expectEqual(-5, fail_src);
@@ -2050,6 +2053,7 @@ test "engine_call: recover() in defer intercepts panic" {
     // Zig error-name string ("PredicateFailed").
     const h = engine_init();
     try std.testing.expect(h > 0);
+    defer engine_destroy(h);
 
     const src =
         \\std  := import("std")
@@ -3160,4 +3164,582 @@ test "engine_get_global, engine_list_globals, and engine_list_functions on an em
     try std.testing.expectEqual(0, engine_list_functions(h, Ctx.funcsCb, &ctx));
     try std.testing.expectEqual(@as(usize, 0), ctx.non_prelude_globals);
     try std.testing.expectEqual(@as(usize, 0), ctx.non_prelude_funcs);
+}
+
+// Regression test for a missing-array-representation bug: Gengo arrays have
+// four internal Object tags (.array, .array_managed, .array_view,
+// .array_capacity — see vm_state.zig's isArrayObject/asArraySlice, the
+// canonical list), and this file's valueToWireDepth/valueToWireWithScratch
+// wire-encoding switches only matched three of the four, omitting
+// .array_view (the representation produced by array-slice expressions like
+// `a[1:4]`). A sliced array exposed through engine_get_global,
+// engine_list_globals, or an engine_call return value fell through to the
+// `else => error.UnsupportedWireType` arm instead of converting, so
+// engine_get_global returned -3 (and left the out wire uninitialized)
+// for any global holding a slice rather than a freshly-built array. Fixed by
+// adding .array_view alongside the other three tags in both switches, same
+// as vms.isArrayObject already does.
+test "engine_get_global converts a sliced array (array_view) global" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+    const src = "a := [10, 20, 30, 40, 50]\nb := a[1:4]\n";
+    const run_rc = engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len));
+    try std.testing.expectEqual(0, run_rc);
+
+    var wire: ValueWire = undefined;
+    const rc = engine_get_global(h, @intCast(@intFromPtr("b".ptr)), 1, @intCast(@intFromPtr(&wire)));
+    try std.testing.expectEqual(0, rc);
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.array)), wire.tag);
+    try std.testing.expectEqual(@as(u32, 3), wire.len);
+
+    const elems = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..3];
+    for (elems, [_]i64{ 20, 30, 40 }) |elem, expected| {
+        try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.number)), elem.tag);
+        try std.testing.expectEqual(@as(i64, expected), @as(i64, @bitCast(elem.payload)));
+    }
+}
+
+test "engine_get_global converts a map global (valueToWireWithScratch's map fast path)" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src = "m := {\"a\": 1, \"b\": 2}\n";
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+
+    var wire: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_get_global(h, @intCast(@intFromPtr("m".ptr)), 1, @intCast(@intFromPtr(&wire))));
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.map)), wire.tag);
+    try std.testing.expectEqual(@as(u32, 2), wire.len);
+
+    const pairs = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..4];
+    var found_a = false;
+    var found_b = false;
+    var i: usize = 0;
+    while (i < 4) : (i += 2) {
+        const key = pairs[i];
+        const val = pairs[i + 1];
+        try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.string)), key.tag);
+        const key_bytes = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(key.payload))))[0..key.len];
+        try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.number)), val.tag);
+        const num: i64 = @bitCast(val.payload);
+        if (std.mem.eql(u8, key_bytes, "a")) {
+            found_a = true;
+            try std.testing.expectEqual(@as(i64, 1), num);
+        } else if (std.mem.eql(u8, key_bytes, "b")) {
+            found_b = true;
+            try std.testing.expectEqual(@as(i64, 2), num);
+        }
+    }
+    try std.testing.expect(found_a);
+    try std.testing.expect(found_b);
+}
+
+test "engine_get_global converts a sliced string (string_view) global" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    // A slice longer than one ASCII byte becomes a .string_view object (see
+    // vm_string.zig's stringSlice); a single-char slice would instead resolve
+    // to the immortal ascii_ss pool, which is a plain .string, not the
+    // representation this test targets.
+    const src = "s := \"hello world\"[0:3]\n";
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+
+    var wire: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_get_global(h, @intCast(@intFromPtr("s".ptr)), 1, @intCast(@intFromPtr(&wire))));
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.string)), wire.tag);
+    const bytes = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(wire.payload))))[0..wire.len];
+    try std.testing.expectEqualStrings("hel", bytes);
+}
+
+// Exercises valueToWireDepth's less-common scalar/nested arms (rune,
+// error_value, dyn_string, string_view, nested array, nested map), which are
+// unreachable from a top-level engine_call/engine_get_global result because
+// valueToWireWithScratch fast-paths those top-level cases itself -- they are
+// only reached when fillArrayWires/fillMapWires recurse into valueToWireDepth
+// for an array's OWN elements.
+test "engine_call converts an array containing rune, error, dyn_string, and nested array/map elements" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    // build_array's runtime type-homogeneity check (vm.zig) rejects a
+    // directly mixed-type literal like [`A`, std.core.error("boom"), ...],
+    // even under a []any return type -- so each scalar is instead wrapped in
+    // its own single-element array. runtimeTypeName reports "array"
+    // uniformly for every array representation regardless of what it holds
+    // (vm_types.zig), so the OUTER array of five arrays is itself
+    // homogeneous, while each inner array's one element is free to be any
+    // type -- reaching valueToWireDepth's arm for that type via
+    // fillArrayWires' recursion two levels deep.
+    const src =
+        \\std := import("std")
+        \\func build() []any {
+        \\    a := [`A`]
+        \\    b := [std.core.error("boom")]
+        \\    c := ["concat" + "enated"]
+        \\    d := [[1, 2]]
+        \\    e := [{"k": 9}]
+        \\    return [a, b, c, d, e]
+        \\}
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+
+    var out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(h, @intCast(@intFromPtr("build".ptr)), 5, 0, 0, @intCast(@intFromPtr(&out))));
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.array)), out.tag);
+    try std.testing.expectEqual(@as(u32, 5), out.len);
+    const outer = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(out.payload))))[0..5];
+    for (outer) |o| {
+        try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.array)), o.tag);
+        try std.testing.expectEqual(@as(u32, 1), o.len);
+    }
+    const elems = [_]ValueWire{
+        @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(outer[0].payload))))[0],
+        @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(outer[1].payload))))[0],
+        @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(outer[2].payload))))[0],
+        @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(outer[3].payload))))[0],
+        @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(outer[4].payload))))[0],
+    };
+
+    // `A` -- rune.
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.number)), elems[0].tag);
+    try std.testing.expect((elems[0].flags & host_abi.FLAG_RUNE) != 0);
+    try std.testing.expectEqual(@as(u64, 'A'), elems[0].payload);
+
+    // std.core.error("boom") -- error_value.
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.@"error")), elems[1].tag);
+    const err_bytes = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(elems[1].payload))))[0..elems[1].len];
+    try std.testing.expectEqualStrings("boom", err_bytes);
+
+    // "concat" + "enated" -- a runtime-built dyn_string.
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.string)), elems[2].tag);
+    const str_bytes = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(elems[2].payload))))[0..elems[2].len];
+    try std.testing.expectEqualStrings("concatenated", str_bytes);
+
+    // [1, 2] -- nested array.
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.array)), elems[3].tag);
+    try std.testing.expectEqual(@as(u32, 2), elems[3].len);
+    const nested_arr = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(elems[3].payload))))[0..2];
+    try std.testing.expectEqual(@as(i64, 1), @as(i64, @bitCast(nested_arr[0].payload)));
+    try std.testing.expectEqual(@as(i64, 2), @as(i64, @bitCast(nested_arr[1].payload)));
+
+    // {"k": 9} -- nested map.
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.map)), elems[4].tag);
+    try std.testing.expectEqual(@as(u32, 1), elems[4].len);
+    const nested_map = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(elems[4].payload))))[0..2];
+    const nested_key = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(nested_map[0].payload))))[0..nested_map[0].len];
+    try std.testing.expectEqualStrings("k", nested_key);
+    try std.testing.expectEqual(@as(i64, 9), @as(i64, @bitCast(nested_map[1].payload)));
+}
+
+// Exercises valueToWireDepth's enum_value, variant_value (a multi-field
+// variant arm, which cannot fit tryMakeInlineVariant's single-scalar-payload
+// representation), and inline_variant arms -- none of which have a fast path
+// in valueToWireWithScratch, so all three fall through its `else` arm into
+// valueToWire/valueToWireDepth at the top level of an engine_call return.
+test "engine_call converts an enum value, a multi-field variant, and an inline variant" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src =
+        \\type Color enum { red, green, blue }
+        \\type Shape variant {
+        \\    Circle(radius int),
+        \\    Rect { w int, h int },
+        \\}
+        \\func makeColor() Color { return Color.green }
+        \\func makeRect() Shape { return Shape.Rect{w: 2, h: 3} }
+        \\func makeCircle() Shape { return Shape.Circle(5) }
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+
+    // Color.green -- enum_value, encoded as its member name string.
+    var color_out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(h, @intCast(@intFromPtr("makeColor".ptr)), 9, 0, 0, @intCast(@intFromPtr(&color_out))));
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.string)), color_out.tag);
+    const color_bytes = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(color_out.payload))))[0..color_out.len];
+    try std.testing.expectEqualStrings("green", color_bytes);
+
+    // Shape.Rect{w, h} -- a multi-field arm; not representable inline, so
+    // this is the compiled variant_value object path.
+    var rect_out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(h, @intCast(@intFromPtr("makeRect".ptr)), 8, 0, 0, @intCast(@intFromPtr(&rect_out))));
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.map)), rect_out.tag);
+    const rect_pairs = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(rect_out.payload))))[0 .. rect_out.len * 2];
+    const rect_tag_key = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(rect_pairs[0].payload))))[0..rect_pairs[0].len];
+    try std.testing.expectEqualStrings("tag", rect_tag_key);
+    const rect_tag_val = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(rect_pairs[1].payload))))[0..rect_pairs[1].len];
+    try std.testing.expectEqualStrings("Rect", rect_tag_val);
+
+    // Shape.Circle(5) -- a single int-payload arm, representable inline via
+    // tryMakeInlineVariant.
+    var circle_out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(h, @intCast(@intFromPtr("makeCircle".ptr)), 10, 0, 0, @intCast(@intFromPtr(&circle_out))));
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.map)), circle_out.tag);
+    const circle_pairs = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(circle_out.payload))))[0..4];
+    const circle_tag_key = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(circle_pairs[0].payload))))[0..circle_pairs[0].len];
+    try std.testing.expectEqualStrings("tag", circle_tag_key);
+    const circle_tag_val = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(circle_pairs[1].payload))))[0..circle_pairs[1].len];
+    try std.testing.expectEqualStrings("Circle", circle_tag_val);
+}
+
+test "engine_call converts a small_struct_instance return value (valueToWireWithScratch's fast path)" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    // Point has 2 fields, well under value.zig's SmallStructMaxFields (4), so
+    // the VM represents an instance as a .small_struct_instance, not the
+    // heap-allocated .struct_instance representation covered elsewhere.
+    const src =
+        \\type Point struct { x int, y int }
+        \\func makePoint() Point { return Point{x: 1, y: 2} }
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+
+    var out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(h, @intCast(@intFromPtr("makePoint".ptr)), 9, 0, 0, @intCast(@intFromPtr(&out))));
+    try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.map)), out.tag);
+    try std.testing.expectEqual(@as(u32, 2), out.len);
+
+    const pairs = @as([*]const ValueWire, @ptrFromInt(@as(usize, @intCast(out.payload))))[0..4];
+    var found_x = false;
+    var found_y = false;
+    var i: usize = 0;
+    while (i < 4) : (i += 2) {
+        const key_bytes = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(pairs[i].payload))))[0..pairs[i].len];
+        const num: i64 = @bitCast(pairs[i + 1].payload);
+        if (std.mem.eql(u8, key_bytes, "x")) {
+            found_x = true;
+            try std.testing.expectEqual(@as(i64, 1), num);
+        } else if (std.mem.eql(u8, key_bytes, "y")) {
+            found_y = true;
+            try std.testing.expectEqual(@as(i64, 2), num);
+        }
+    }
+    try std.testing.expect(found_x);
+    try std.testing.expect(found_y);
+}
+
+// Exercises wireToValueDepth's boolean/rune/decimal/error/map arms: every
+// other engine_call argument test in this file only ever passes number and
+// string wire arguments in.
+test "engine_call accepts boolean, rune, decimal, error, and map host-supplied wire arguments" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src =
+        \\std := import("std")
+        \\func typeOf(v any) string { return std.core.type_of(v) }
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+
+    const Case = struct {
+        wire: ValueWire,
+        want: []const u8,
+    };
+
+    var err_msg: [4]u8 = "boom".*;
+    var pair_wires = [_]ValueWire{
+        .{ .tag = @intFromEnum(WireTag.string), .flags = 0, .reserved = 0, .payload = @intFromPtr("k".ptr), .len = 1, .reserved2 = 0 },
+        .{ .tag = @intFromEnum(WireTag.number), .flags = host_abi.FLAG_INTEGER, .reserved = 0, .payload = @bitCast(@as(i64, 1)), .len = 0, .reserved2 = 0 },
+    };
+
+    const cases = [_]Case{
+        .{ .wire = .{ .tag = @intFromEnum(WireTag.boolean), .flags = 0, .reserved = 0, .payload = 1, .len = 0, .reserved2 = 0 }, .want = "bool" },
+        .{ .wire = .{ .tag = @intFromEnum(WireTag.number), .flags = host_abi.FLAG_RUNE, .reserved = 0, .payload = @as(u64, 'A'), .len = 0, .reserved2 = 0 }, .want = "rune" },
+        .{ .wire = .{ .tag = @intFromEnum(WireTag.number), .flags = host_abi.FLAG_DECIMAL, .reserved = 0, .payload = @bitCast(@as(i64, 100)), .len = 0, .reserved2 = 0 }, .want = "decimal" },
+        .{ .wire = .{ .tag = @intFromEnum(WireTag.@"error"), .flags = 0, .reserved = 0, .payload = @intFromPtr(&err_msg), .len = err_msg.len, .reserved2 = 0 }, .want = "error" },
+        .{ .wire = .{ .tag = @intFromEnum(WireTag.map), .flags = 0, .reserved = 0, .payload = @intFromPtr(&pair_wires), .len = 1, .reserved2 = 0 }, .want = "map" },
+    };
+
+    for (cases) |case| {
+        var arg = case.wire;
+        var out: ValueWire = undefined;
+        try std.testing.expectEqual(0, engine_call(h, @intCast(@intFromPtr("typeOf".ptr)), 6, @intCast(@intFromPtr(&arg)), 1, @intCast(@intFromPtr(&out))));
+        try std.testing.expectEqual(@as(u8, @intFromEnum(WireTag.string)), out.tag);
+        const got = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(out.payload))))[0..out.len];
+        try std.testing.expectEqualStrings(case.want, got);
+    }
+}
+
+test "engine_call reuses and frees the large string scratch buffer across repeated large-string calls" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src =
+        \\std := import("std")
+        \\pub func big(n int) string {
+        \\    return std.string.repeat("x", n)
+        \\}
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+
+    // First large-string result: string_scratch_large is null, so
+    // setStringScratch takes the null branch and allocates fresh.
+    var arg1: ValueWire = .{ .tag = @intFromEnum(WireTag.number), .flags = host_abi.FLAG_INTEGER, .reserved = 0, .payload = @bitCast(@as(i64, 5000)), .len = 0, .reserved2 = 0 };
+    var out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(h, @intCast(@intFromPtr("big".ptr)), 3, @intCast(@intFromPtr(&arg1)), 1, @intCast(@intFromPtr(&out))));
+    try std.testing.expectEqual(@as(u32, 5000), out.len);
+
+    // Second large-string result on the SAME engine: setStringScratch now
+    // sees a previous large buffer and must free it before allocating the
+    // new one.
+    var arg2: ValueWire = .{ .tag = @intFromEnum(WireTag.number), .flags = host_abi.FLAG_INTEGER, .reserved = 0, .payload = @bitCast(@as(i64, 6000)), .len = 0, .reserved2 = 0 };
+    try std.testing.expectEqual(0, engine_call(h, @intCast(@intFromPtr("big".ptr)), 3, @intCast(@intFromPtr(&arg2)), 1, @intCast(@intFromPtr(&out))));
+    try std.testing.expectEqual(@as(u32, 6000), out.len);
+    const bytes = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(out.payload))))[0..out.len];
+    for (bytes) |b| try std.testing.expectEqual(@as(u8, 'x'), b);
+}
+
+fn declineAllImportsLoader(ctx: ?*anyopaque, path_ptr: PtrInt, path_len: i32, out_ptr: PtrInt, out_max_len: i32) callconv(.c) i32 {
+    _ = ctx;
+    _ = path_ptr;
+    _ = path_len;
+    _ = out_ptr;
+    _ = out_max_len;
+    // 0 means "not found" (as opposed to a negative error code), which lets
+    // importLoaderWrapper fall through to its later resolution steps instead
+    // of failing the import outright.
+    return 0;
+}
+
+// Regression/coverage test for importLoaderWrapper's final fallback: once an
+// import_loader_fn is registered, module_compile's defaultSourceProvider
+// uses ONLY the callback provider (never the module_sources table directly,
+// see api.zig's defaultSourceProvider) -- so a source added via
+// engine_add_source is otherwise unreachable while a loader is active unless
+// importLoaderWrapper itself falls back to scanning engine.source_entries
+// after the loader and the package registry both decline the path.
+test "engine_add_source's entry resolves an import once the registered loader declines it" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    try std.testing.expectEqual(@as(i32, 0), engine_set_import_loader(h, declineAllImportsLoader, null));
+
+    const lib_path = "extra";
+    const lib_src = "pub func hello() int { return 9 }";
+    try std.testing.expectEqual(@as(i32, 0), engine_add_source(h, @intCast(@intFromPtr(lib_path.ptr)), @intCast(lib_path.len), @intCast(@intFromPtr(lib_src.ptr)), @intCast(lib_src.len)));
+
+    const main_src =
+        \\lib := import("extra")
+        \\pub func run() int { return lib.hello() }
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(main_src.ptr)), @intCast(main_src.len)));
+
+    var out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(h, @intCast(@intFromPtr("run".ptr)), 3, 0, 0, @intCast(@intFromPtr(&out))));
+    try std.testing.expectEqual(@as(i64, 9), @as(i64, @bitCast(out.payload)));
+}
+
+const ReentrantCallbackContext = struct {
+    handle: i32 = 0,
+    got_global_rc: i32 = -99,
+    got_global_value: i64 = -1,
+
+    fn callback(context: ?*anyopaque, id: u16, args: [*]const ValueWire, argc: u16, out: *ValueWire) callconv(.c) i32 {
+        _ = args;
+        _ = argc;
+        const self = @as(*@This(), @ptrCast(@alignCast(context.?)));
+        switch (id) {
+            @intFromEnum(host_abi.HostCall.abi_version) => {
+                out.* = .{ .tag = @intFromEnum(WireTag.number), .flags = 0, .reserved = 0, .payload = @bitCast(@as(f64, @floatFromInt(host_abi.ABI_VERSION))), .len = 0, .reserved2 = 0 };
+                return @intFromEnum(host_abi.CallStatus.ok);
+            },
+            HostModuleCallIdBase => {
+                // Reenters the SAME engine handle from inside its own
+                // engine_call: g_active_engine is already this engine when
+                // pushEngineState runs here, so popEngineState below takes
+                // its `if (prev) |p|` restore branch, not the "no previous
+                // engine" else branch that a top-level call takes.
+                var wire: ValueWire = undefined;
+                self.got_global_rc = engine_get_global(self.handle, @intCast(@intFromPtr("x".ptr)), 1, @intCast(@intFromPtr(&wire)));
+                self.got_global_value = @as(i64, @bitCast(wire.payload));
+                out.* = .{ .tag = @intFromEnum(WireTag.number), .flags = host_abi.FLAG_INTEGER, .reserved = 0, .payload = @bitCast(@as(i64, 0)), .len = 0, .reserved2 = 0 };
+                return @intFromEnum(host_abi.CallStatus.ok);
+            },
+            else => return @intFromEnum(host_abi.CallStatus.unsupported),
+        }
+    }
+};
+
+test "engine_call: a host module callback that reenters the engine restores the outer active-engine state" {
+    if (comptime is_wasm) return;
+    const handle = engine_init();
+    try std.testing.expect(handle > 0);
+    defer engine_destroy(handle);
+
+    var context: ReentrantCallbackContext = .{ .handle = handle };
+    try std.testing.expectEqual(0, engine_set_host_call_fn(handle, ReentrantCallbackContext.callback, &context));
+    const funcs = [_]HostModuleFuncDef{.{ .name_ptr = @intFromPtr("touch".ptr), .name_len = 5, .arity = 1 }};
+    try std.testing.expectEqual(0, engine_register_module(handle, @intFromPtr("h".ptr), 1, @intFromPtr(&funcs), funcs.len));
+
+    const source =
+        \\x := 100
+        \\h := import("host:h")
+        \\pub func run() int { return h.touch(1) }
+    ;
+    try std.testing.expectEqual(0, engine_run(handle, @intFromPtr(source.ptr), source.len));
+
+    var out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(handle, @intFromPtr("run".ptr), 3, 0, 0, @intFromPtr(&out)));
+    try std.testing.expectEqual(0, context.got_global_rc);
+    try std.testing.expectEqual(@as(i64, 100), context.got_global_value);
+
+    // The outer call's own state (activated again by its popEngineState
+    // restore) must still be fully functional after the nested call returned.
+    try std.testing.expectEqual(0, engine_call(handle, @intFromPtr("run".ptr), 3, 0, 0, @intFromPtr(&out)));
+    try std.testing.expectEqual(@as(i64, 100), context.got_global_value);
+}
+
+test "engine_set_write_fn cleared: default write path reaches real stderr for eprintln" {
+    if (comptime is_wasm) return;
+    // eprintln is gated behind the io capability, closed by default (see
+    // Engine.initInPlaceDefault's allow_io = false) -- engine_init_with_config
+    // is needed here just to opt in, same as the other io-capability tests
+    // in this file (e.g. "engine_set_write_fn routes script output...").
+    const config: InstanceConfig = .{
+        .heap_size_bytes = @min(cfg.heap_size_bytes, 1024 * 1024),
+        .max_objects = @min(cfg.max_objects, 2048),
+        .max_stack = @min(cfg.max_stack, 512),
+        .max_frames = @min(cfg.max_frames, 64),
+        .max_defers = @min(cfg.max_defers, 128),
+        .max_ops = -1,
+        .allow_io = true,
+    };
+    const h = engine_init_with_config(@intFromPtr(&config));
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    // No engine_set_write_fn call: write_callback stays null, so
+    // WriteImpl.write's is_stderr branch calls io.writeAllFd(2, ...) instead
+    // of a host callback. This actually writes to the test process's real
+    // stderr; that is the behavior under test.
+    const src =
+        \\std := import("std")
+        \\std.io.eprintln("engine.zig coverage: default-stderr-path probe")
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+}
+
+test "gengo_engine_version returns the compiled-in version string" {
+    const v = std.mem.span(gengo_engine_version());
+    try std.testing.expect(v.len > 0);
+    try std.testing.expectEqualStrings(build_opts.version, v);
+}
+
+test "engine_init returns 0 once every engine slot is in use" {
+    var handles: [MaxEngines]i32 = undefined;
+    var count: usize = 0;
+    defer for (handles[0..count]) |h| engine_destroy(h);
+
+    while (count < MaxEngines) : (count += 1) {
+        const h = engine_init();
+        try std.testing.expect(h > 0);
+        handles[count] = h;
+    }
+    try std.testing.expectEqual(@as(i32, 0), engine_init());
+}
+
+test "engine_init_with_config returns 0 once every engine slot is in use" {
+    const config: InstanceConfig = .{
+        .heap_size_bytes = @min(cfg.heap_size_bytes, 64 * 1024),
+        .max_objects = @min(cfg.max_objects, 512),
+        .max_stack = @min(cfg.max_stack, 128),
+        .max_frames = @min(cfg.max_frames, 32),
+        .max_defers = @min(cfg.max_defers, 32),
+        .max_ops = -1,
+        .allow_io = false,
+    };
+    var handles: [MaxEngines]i32 = undefined;
+    var count: usize = 0;
+    defer for (handles[0..count]) |h| engine_destroy(h);
+
+    while (count < MaxEngines) : (count += 1) {
+        const h = engine_init_with_config(@intFromPtr(&config));
+        try std.testing.expect(h > 0);
+        handles[count] = h;
+    }
+    try std.testing.expectEqual(@as(i32, 0), engine_init_with_config(@intFromPtr(&config)));
+}
+
+test "engine_run rejects a negative src_len" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+    try std.testing.expectEqual(@as(i32, -1), engine_run(h, 0, -1));
+}
+
+test "engine_run_path succeeds on a valid script and rejects negative lengths" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src = "func ok() int { return 5 }\n";
+    try std.testing.expectEqual(@as(i32, 0), engine_run_path(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len), @intCast(@intFromPtr("main.gengo".ptr)), 10));
+    var out: ValueWire = undefined;
+    try std.testing.expectEqual(0, engine_call(h, @intCast(@intFromPtr("ok".ptr)), 2, 0, 0, @intCast(@intFromPtr(&out))));
+    try std.testing.expectEqual(@as(i64, 5), @as(i64, @bitCast(out.payload)));
+
+    try std.testing.expectEqual(@as(i32, -1), engine_run_path(h, 0, -1, @intCast(@intFromPtr("main.gengo".ptr)), 10));
+    try std.testing.expectEqual(@as(i32, -1), engine_run_path(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len), 0, -1));
+}
+
+test "engine_run_path reports a compile error and populates line/col/path" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src = "func broken( { }\n";
+    const rc = engine_run_path(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len), @intCast(@intFromPtr("bad.gengo".ptr)), 9);
+    try std.testing.expectEqual(@as(i32, -1), rc);
+    try std.testing.expect(engine_last_error_line(h) > 0);
+}
+
+test "engine_last_error_col reports the real column of a compile error" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    // A malformed parameter list on line 2 is a genuine syntax (compile)
+    // error, unlike a bare identifier statement (which the compiler accepts
+    // as a discarded expression statement and only faults at runtime).
+    const src = "y := 1\nfunc broken( { }\n";
+    const rc = engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len));
+    try std.testing.expectEqual(@as(i32, -1), rc);
+    try std.testing.expectEqual(@as(i32, 2), engine_last_error_line(h));
+    try std.testing.expect(engine_last_error_col(h) > 0);
+}
+
+test "engine_begin rejects a negative src_len and reports a compile error via execResultCode" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    try std.testing.expectEqual(@as(i32, -1), engine_begin(h, 0, -1));
+
+    const bad_src = "func broken( { }\n";
+    try std.testing.expectEqual(@as(i32, -1), engine_begin(h, @intCast(@intFromPtr(bad_src.ptr)), @intCast(bad_src.len)));
+    try std.testing.expect(engine_last_error_line(h) > 0);
+}
+
+test "engine_call rejects a negative argc and an argc above the 64-argument cap" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src = "func f() int { return 1 }\n";
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+
+    var out: ValueWire = undefined;
+    try std.testing.expectEqual(@as(i32, -3), engine_call(h, @intCast(@intFromPtr("f".ptr)), 1, 0, -1, @intCast(@intFromPtr(&out))));
+    try std.testing.expectEqual(@as(i32, -3), engine_call(h, @intCast(@intFromPtr("f".ptr)), 1, 0, 65, @intCast(@intFromPtr(&out))));
 }

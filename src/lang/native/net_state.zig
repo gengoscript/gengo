@@ -1018,7 +1018,10 @@ pub fn netRead(id: u32, max_bytes: usize) ![]u8 {
             return error.NetError;
         })(conn.host_handle, buf.ptr, clamped, h.userdata);
         if (n < 0) {
-            std.heap.page_allocator.free(buf);
+            // `buf` is freed by the errdefer above — don't also free it here
+            // (that was a double-free: this file's own TLS netRead branch a
+            // few lines down shows the correct pattern of relying solely on
+            // the errdefer).
             setNetErr("read: host handler returned error {d}", .{n});
             return error.NetError;
         }
@@ -1550,6 +1553,53 @@ fn fakeSetAcceptDeadline(listener_handle: i32, ms: i64, userdata: ?*anyopaque) c
     g_fake_net.last_accept_deadline_ms = ms;
 }
 
+// Error-returning counterparts of the fake* callbacks above, used only to
+// drive the "host handler returned error <n>" branches of each net_state
+// entry point — those are otherwise unreachable since every fake* callback
+// above always reports success.
+fn fakeDialError(network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 {
+    _ = network;
+    _ = network_len;
+    _ = address;
+    _ = address_len;
+    _ = out_handle;
+    _ = userdata;
+    return -1;
+}
+
+fn fakeListenError(network: [*]const u8, network_len: usize, address: [*]const u8, address_len: usize, out_listener_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 {
+    _ = network;
+    _ = network_len;
+    _ = address;
+    _ = address_len;
+    _ = out_listener_handle;
+    _ = userdata;
+    return -1;
+}
+
+fn fakeReadError(handle: i32, buf: [*]u8, max_bytes: i32, userdata: ?*anyopaque) callconv(.c) i32 {
+    _ = handle;
+    _ = buf;
+    _ = max_bytes;
+    _ = userdata;
+    return -1;
+}
+
+fn fakeWriteError(handle: i32, data: [*]const u8, len: i32, userdata: ?*anyopaque) callconv(.c) i32 {
+    _ = handle;
+    _ = data;
+    _ = len;
+    _ = userdata;
+    return -1;
+}
+
+fn fakeAcceptError(listener_handle: i32, out_conn_handle: *i32, userdata: ?*anyopaque) callconv(.c) i32 {
+    _ = listener_handle;
+    _ = out_conn_handle;
+    _ = userdata;
+    return -1;
+}
+
 const fake_net_handlers: GengoNetHandlers = .{
     .dial = fakeDial,
     .read = fakeRead,
@@ -1930,6 +1980,16 @@ test "net_state (native): dial reaches a real IPv6 loopback listener via a brack
     const got = try netRead(accepted_id, 16);
     defer std.heap.page_allocator.free(got);
     try testing.expectEqualStrings("hi", got);
+
+    // Also exercise netLocalAddr/netRemoteAddr's AF.INET6 formatting branch
+    // (formatIp6Address via a real connection, not just a listener).
+    const dial_local = try netLocalAddr(conn_id);
+    defer std.heap.page_allocator.free(dial_local);
+    try testing.expect(std.mem.startsWith(u8, dial_local, "[0000:0000:0000:0000:0000:0000:0000:0001]:"));
+
+    const accept_remote = try netRemoteAddr(accepted_id);
+    defer std.heap.page_allocator.free(accept_remote);
+    try testing.expect(std.mem.startsWith(u8, accept_remote, "[0000:0000:0000:0000:0000:0000:0000:0001]:"));
 }
 
 test "net_state (native): dial reaches a real connect() attempt and surfaces connection-refused for a closed loopback port" {
@@ -2052,4 +2112,406 @@ test "net_state (native): real POSIX path surfaces CapabilityError/NetError for 
     try testing.expectError(error.CapabilityError, netListenerClose(999));
     try testing.expectError(error.CapabilityError, netListenerLocalAddr(999));
     try testing.expectError(error.CapabilityError, netListenerSetAcceptDeadline(999, 10));
+}
+
+// ---------------------------------------------------------------------------
+// Coverage sweep: netReset, initArrays OOM, dial/listen host-callback error
+// arms, and the remaining native-path edge cases (bind-in-use, accept with a
+// full pool / an invalidated fd, write-side connection-reset). All follow the
+// isolation and loopback-only conventions established above.
+// ---------------------------------------------------------------------------
+
+test "net_state: initArrays frees the conns allocation via errdefer when the listeners allocation subsequently fails" {
+    var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 1 });
+    var state: NetEngineState = .{};
+    try testing.expectError(error.OutOfMemory, state.initArrays(failing.allocator()));
+    try testing.expectEqual(@as(usize, 0), state.conns.len);
+}
+
+test "net_state: netReset closes and clears every handler-path connection/listener" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    g_fake_net = .{};
+    setNetHandlers(fake_net_handlers, null);
+    defer resetHandlers();
+
+    _ = try netDial("tcp", "x:1");
+    _ = try netDial("tcp", "x:1");
+    _ = try netListen("tcp", "x:1");
+
+    netReset();
+
+    try testing.expectEqual(@as(usize, 0), state.conn_count);
+    try testing.expectEqual(@as(usize, 0), state.listener_count);
+    try testing.expectEqual(@as(u32, 1), state.next_id);
+    try testing.expectEqual(@as(u32, 1), state.next_listener_id);
+
+    // The pool should be fully usable again post-reset.
+    try testing.expectEqual(@as(u32, 1), try netDial("tcp", "x:1"));
+}
+
+test "net_state (native): netReset closes and clears a real POSIX connection and listener" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    const listener_id = try netListen("tcp", "127.0.0.1:0");
+    const listener_addr = try netListenerLocalAddr(listener_id);
+    defer std.heap.page_allocator.free(listener_addr);
+    const port = testPort(listener_addr);
+    var dial_buf: [32]u8 = undefined;
+    const dial_addr = try std.fmt.bufPrint(&dial_buf, "127.0.0.1:{d}", .{port});
+    _ = try netDial("tcp", dial_addr);
+
+    try testing.expectEqual(@as(usize, 1), state.conn_count);
+    try testing.expectEqual(@as(usize, 1), state.listener_count);
+
+    netReset();
+
+    try testing.expectEqual(@as(usize, 0), state.conn_count);
+    try testing.expectEqual(@as(usize, 0), state.listener_count);
+    try testing.expectEqual(@as(u32, 1), state.next_id);
+    try testing.expectEqual(@as(u32, 1), state.next_listener_id);
+}
+
+test "net_state: dial/listen via host handlers surface 'handler not registered' when dial/listen are unset" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    g_fake_net = .{};
+    var h = fake_net_handlers;
+    h.dial = null;
+    setNetHandlers(h, null);
+    try testing.expectError(error.NetError, netDial("tcp", "x:1"));
+    try testing.expectEqualStrings("dial handler not registered", lastNetErr());
+    resetHandlers();
+
+    h = fake_net_handlers;
+    h.listen = null;
+    setNetHandlers(h, null);
+    try testing.expectError(error.NetError, netListen("tcp", "x:1"));
+    try testing.expectEqualStrings("listen handler not registered", lastNetErr());
+    resetHandlers();
+}
+
+test "net_state: dial/listen via host handlers surface a NetError when the host callback returns a negative code" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    g_fake_net = .{};
+    var h = fake_net_handlers;
+    h.dial = fakeDialError;
+    setNetHandlers(h, null);
+    try testing.expectError(error.NetError, netDial("tcp", "x:1"));
+    try testing.expectEqualStrings("dial: host handler returned error -1", lastNetErr());
+    resetHandlers();
+
+    h = fake_net_handlers;
+    h.listen = fakeListenError;
+    setNetHandlers(h, null);
+    try testing.expectError(error.NetError, netListen("tcp", "x:1"));
+    try testing.expectEqualStrings("listen: host handler returned error -1", lastNetErr());
+    resetHandlers();
+}
+
+test "net_state: read/write/accept via host handlers surface 'unknown handle' NetErrors" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    g_fake_net = .{};
+    setNetHandlers(fake_net_handlers, null);
+    defer resetHandlers();
+
+    try testing.expectError(error.NetError, netRead(999, 4));
+    try testing.expectEqualStrings("read: unknown connection handle 999", lastNetErr());
+    try testing.expectError(error.NetError, netWrite(999, "x"));
+    try testing.expectEqualStrings("write: unknown connection handle 999", lastNetErr());
+    try testing.expectError(error.NetError, netListenerAccept(999));
+    try testing.expectEqualStrings("accept: unknown listener handle 999", lastNetErr());
+}
+
+test "net_state: read/write/accept via host handlers surface 'handler not registered' when unset" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    g_fake_net = .{};
+    var h = fake_net_handlers;
+    h.read = null;
+    h.write = null;
+    h.accept = null;
+    setNetHandlers(h, null);
+    defer resetHandlers();
+
+    const conn_id = try netDial("tcp", "x:1");
+    const listener_id = try netListen("tcp", "x:1");
+
+    try testing.expectError(error.NetError, netRead(conn_id, 4));
+    try testing.expectEqualStrings("read handler not registered", lastNetErr());
+    try testing.expectError(error.NetError, netWrite(conn_id, "x"));
+    try testing.expectEqualStrings("write handler not registered", lastNetErr());
+    try testing.expectError(error.NetError, netListenerAccept(listener_id));
+    try testing.expectEqualStrings("accept handler not registered", lastNetErr());
+}
+
+test "net_state: read/write/accept via host handlers surface a NetError when the host callback returns a negative code" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    g_fake_net = .{};
+    var h = fake_net_handlers;
+    h.read = fakeReadError;
+    h.write = fakeWriteError;
+    h.accept = fakeAcceptError;
+    setNetHandlers(h, null);
+    defer resetHandlers();
+
+    const conn_id = try netDial("tcp", "x:1");
+    const listener_id = try netListen("tcp", "x:1");
+
+    try testing.expectError(error.NetError, netRead(conn_id, 4));
+    try testing.expectEqualStrings("read: host handler returned error -1", lastNetErr());
+    try testing.expectError(error.NetError, netWrite(conn_id, "x"));
+    try testing.expectEqualStrings("write: host handler returned error -1", lastNetErr());
+    try testing.expectError(error.NetError, netListenerAccept(listener_id));
+    try testing.expectEqualStrings("accept: host handler returned error -1", lastNetErr());
+}
+
+test "net_state: netListenerAccept via host handlers surfaces 'too many connections' once the pool is full" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    g_fake_net = .{};
+    setNetHandlers(fake_net_handlers, null);
+    defer resetHandlers();
+
+    var i: usize = 0;
+    while (i < MaxConns) : (i += 1) _ = try netDial("tcp", "x:1");
+
+    const listener_id = try netListen("tcp", "x:1");
+    try testing.expectError(error.NetError, netListenerAccept(listener_id));
+    try testing.expectEqualStrings("too many connections (max 16)", lastNetErr());
+}
+
+test "net_state (native): dial rejects an IPv4 literal against network \"tcp6\" and an IPv6 literal against \"tcp4\"" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    try testing.expectError(error.NetError, netDial("tcp6", "127.0.0.1:1"));
+    try testing.expectEqualStrings("dial: IPv4 address \"127.0.0.1\" not valid for network \"tcp6\"", lastNetErr());
+
+    try testing.expectError(error.NetError, netDial("tcp4", "[::1]:1"));
+    try testing.expectEqualStrings("dial: IPv6 address \"::1\" not valid for network \"tcp4\"", lastNetErr());
+}
+
+test "net_state (native): dial rejects a hostname with characters HostName.validate disallows" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    try testing.expectError(error.NetError, netDial("tcp", "bad_host:1234"));
+    try testing.expect(std.mem.indexOf(u8, lastNetErr(), "invalid hostname") != null);
+}
+
+// Exercises netDial's real (non-IP-literal) hostname lookup path: "localhost"
+// resolves via std.Io.net.HostName.lookup, which on this Threaded backend
+// first consults /etc/hosts (net_state.zig never opens a real DNS socket for
+// it — see std.Io.Threaded.netLookupFallible) and only falls back to its
+// RFC 6761 in-process loopback fast path if /etc/hosts has no entry. Either
+// way resolution is purely local, involves no network I/O, and can't hang.
+//
+// Which address family /etc/hosts hands back first (127.0.0.1 vs ::1) is
+// system-dependent, so this test doesn't bind a matching listener — it just
+// confirms resolution *succeeded* by reserving-then-releasing a real
+// ephemeral port (so nothing listens there on any family) and observing the
+// dial reach a genuine connect() attempt (refused), the same technique the
+// "connection refused" test above uses for the IP-literal path.
+test "net_state (native): dial resolves the hostname \"localhost\" via the real DNS-lookup code path" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    const listener_id = try netListen("tcp", "127.0.0.1:0");
+    const listener_addr = try netListenerLocalAddr(listener_id);
+    defer std.heap.page_allocator.free(listener_addr);
+    const port = testPort(listener_addr);
+    try netListenerClose(listener_id);
+
+    var dial_buf: [32]u8 = undefined;
+    const dial_addr = try std.fmt.bufPrint(&dial_buf, "localhost:{d}", .{port});
+    try testing.expectError(error.NetError, netDial("tcp", dial_addr));
+    try testing.expect(std.mem.indexOf(u8, lastNetErr(), "connection refused") != null);
+}
+
+test "net_state (native): listen surfaces 'bind failed' when the address is already in use" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    const listener_id = try netListen("tcp", "127.0.0.1:0");
+    defer netListenerClose(listener_id) catch {};
+    const listener_addr = try netListenerLocalAddr(listener_id);
+    defer std.heap.page_allocator.free(listener_addr);
+    const port = testPort(listener_addr);
+
+    var buf: [32]u8 = undefined;
+    const addr2 = try std.fmt.bufPrint(&buf, "127.0.0.1:{d}", .{port});
+    try testing.expectError(error.NetError, netListen("tcp", addr2));
+    try testing.expect(std.mem.indexOf(u8, lastNetErr(), "bind failed") != null);
+}
+
+test "net_state (native): listener accept surfaces 'too many connections' when the pool is already full" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    const listener_id = try netListen("tcp", "127.0.0.1:0");
+    defer netListenerClose(listener_id) catch {};
+    const listener_addr = try netListenerLocalAddr(listener_id);
+    defer std.heap.page_allocator.free(listener_addr);
+    const port = testPort(listener_addr);
+    var dial_buf: [32]u8 = undefined;
+    const dial_addr = try std.fmt.bufPrint(&dial_buf, "127.0.0.1:{d}", .{port});
+
+    // All MaxConns dials land in the listener's backlog (128 >> 16) without
+    // ever being accepted, filling the connection pool via the dial side.
+    var dial_ids: [MaxConns]u32 = undefined;
+    var i: usize = 0;
+    while (i < MaxConns) : (i += 1) dial_ids[i] = try netDial("tcp", dial_addr);
+    defer for (dial_ids) |id| {
+        netClose(id) catch {};
+    };
+
+    try testing.expectError(error.NetError, netListenerAccept(listener_id));
+    try testing.expectEqualStrings("too many connections (max 16)", lastNetErr());
+}
+
+test "net_state (native): listener accept surfaces a generic errno branch when the underlying fd is invalid" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    const listener_id = try netListen("tcp", "127.0.0.1:0");
+    const l = findListener(listener_id).?;
+    // Invalidate the fd out from under net_state's own bookkeeping (bypassing
+    // netListenerClose) so the next accept() syscall fails with EBADF instead
+    // of any of the specially-handled errno values.
+    _ = std.posix.system.close(l.socket);
+    try testing.expectError(error.NetError, netListenerAccept(listener_id));
+    try testing.expect(std.mem.indexOf(u8, lastNetErr(), "accept:") != null);
+    removeListener(listener_id);
+}
+
+test "net_state (native): write surfaces 'connection reset by peer' after the peer aborts with SO_LINGER(0)" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    const listener_id = try netListen("tcp", "127.0.0.1:0");
+    const listener_addr = try netListenerLocalAddr(listener_id);
+    defer std.heap.page_allocator.free(listener_addr);
+    const port = testPort(listener_addr);
+    var dial_buf: [32]u8 = undefined;
+    const dial_addr = try std.fmt.bufPrint(&dial_buf, "127.0.0.1:{d}", .{port});
+
+    const dial_id = try netDial("tcp", dial_addr);
+    const accept_id = try netListenerAccept(listener_id);
+    defer netClose(dial_id) catch {};
+    defer netListenerClose(listener_id) catch {};
+
+    // Same abortive-close technique as the read-side RST test above, but this
+    // time targeting netWrite's own CONNRESET arm.
+    const accept_conn = findConn(accept_id).?;
+    const lg = std.posix.linger{ .onoff = 1, .linger = 0 };
+    _ = std.posix.system.setsockopt(accept_conn.socket, std.posix.SOL.SOCKET, std.posix.SO.LINGER, std.mem.asBytes(&lg).ptr, @sizeOf(std.posix.linger));
+    _ = std.posix.system.close(accept_conn.socket);
+    removeConn(accept_id);
+
+    try testing.expectError(error.NetError, netWrite(dial_id, "x"));
+    try testing.expectEqualStrings("write: connection reset by peer", lastNetErr());
+}
+
+test "net_state (native): dial_tls surfaces a handshake-failed NetError against a plain (non-TLS) loopback peer" {
+    var state: NetEngineState = .{};
+    try state.initArrays(testing.allocator);
+    defer state.deinitArrays(testing.allocator);
+    setActive(&state);
+    defer setActive(defaultState());
+
+    // A raw POSIX listening socket, deliberately *not* net_state's own
+    // netListen/netListenerAccept: g_state is threadlocal, so the acceptor
+    // thread spawned below would otherwise see its own empty default
+    // NetEngineState rather than `state`.
+    const listen_sock = std.posix.system.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
+    try testing.expect(std.posix.errno(listen_sock) == .SUCCESS);
+    const listen_fd: std.posix.socket_t = @intCast(listen_sock);
+    defer _ = std.posix.system.close(listen_fd);
+
+    var addr_storage: std.posix.sockaddr.storage = std.mem.zeroes(std.posix.sockaddr.storage);
+    const sa: *std.posix.sockaddr.in = @ptrCast(&addr_storage);
+    sa.family = std.posix.AF.INET;
+    sa.port = 0;
+    sa.addr = @bitCast([4]u8{ 127, 0, 0, 1 });
+    try testing.expect(std.posix.errno(std.posix.system.bind(listen_fd, @ptrCast(&addr_storage), @sizeOf(std.posix.sockaddr.in))) == .SUCCESS);
+    try testing.expect(std.posix.errno(std.posix.system.listen(listen_fd, 1)) == .SUCCESS);
+
+    var actual_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.storage);
+    try posixGetsockname(listen_fd, @ptrCast(&addr_storage), &actual_len);
+    const port = std.mem.bigToNative(u16, sa.port);
+
+    const Worker = struct {
+        fn run(fd: std.posix.socket_t) void {
+            const crc = std.posix.system.accept(fd, null, null);
+            if (std.posix.errno(crc) != .SUCCESS) return;
+            // Close immediately: the TLS client's first handshake read then
+            // observes EOF/RST right away instead of blocking indefinitely
+            // (dial_tls's transport reads use a 0 == "no deadline" FdReader).
+            _ = std.posix.system.close(@as(std.posix.socket_t, @intCast(crc)));
+        }
+    };
+    const thread = try std.Thread.spawn(.{}, Worker.run, .{listen_fd});
+    defer thread.join();
+
+    var dial_buf: [32]u8 = undefined;
+    const dial_addr = try std.fmt.bufPrint(&dial_buf, "127.0.0.1:{d}", .{port});
+    try testing.expectError(error.NetError, netDialTls("tcp", dial_addr));
+    try testing.expect(std.mem.indexOf(u8, lastNetErr(), "dial_tls: TLS handshake failed") != null);
 }
