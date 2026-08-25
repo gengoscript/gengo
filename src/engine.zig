@@ -2942,3 +2942,222 @@ test "engine_set_read_fn routes std.io.readline through the host callback" {
     const s = @as([*]const u8, @ptrFromInt(@as(usize, @bitCast(out.payload))))[0..out.len];
     try std.testing.expectEqualStrings("hello", s);
 }
+
+// engine_call's error paths beyond a wire-conversion failure: calling a name
+// that was never defined (vm.callGlobal's `orelse return error.NotDefined`),
+// calling with the wrong argument count for the target function's declared
+// arity (enterFunctionFrame's error.ArityMismatch), and calling into a
+// function that itself panics without recovering (an ordinary uncaught
+// runtime error, e.g. an out-of-range index). All three reach engine_call
+// through the same runtime_error arm as a recovered-panic call would, so
+// they must return -2 (not crash, not silently succeed) and engine_last_error
+// must report a non-empty, on-topic message afterward.
+test "engine_call reports -2 for an undefined function, wrong arity, and an uncaught panic" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src =
+        \\pub func add(a int, b int) int { return a + b }
+        \\pub func boom() int {
+        \\    const arr = [1, 2, 3]
+        \\    return arr[99]
+        \\}
+    ;
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+
+    // Undefined function name.
+    var out: ValueWire = undefined;
+    const missing_name = "does_not_exist";
+    const rc_missing = engine_call(h, @intCast(@intFromPtr(missing_name.ptr)), @intCast(missing_name.len), 0, 0, @intCast(@intFromPtr(&out)));
+    try std.testing.expectEqual(@as(i32, -2), rc_missing);
+    var buf: [MaxErrorLen]u8 = undefined;
+    var n = engine_last_error(h, @intCast(@intFromPtr(&buf)), buf.len);
+    try std.testing.expect(n > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@as(usize, @intCast(n))], "NotDefined") != null);
+
+    // Wrong argument count: `add` takes 2 args, call it with 0.
+    const add_name = "add";
+    const rc_arity = engine_call(h, @intCast(@intFromPtr(add_name.ptr)), @intCast(add_name.len), 0, 0, @intCast(@intFromPtr(&out)));
+    try std.testing.expectEqual(@as(i32, -2), rc_arity);
+    n = engine_last_error(h, @intCast(@intFromPtr(&buf)), buf.len);
+    try std.testing.expect(n > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@as(usize, @intCast(n))], "ArityMismatch") != null);
+
+    // Uncaught panic inside the called function (no recover()).
+    const boom_name = "boom";
+    const rc_panic = engine_call(h, @intCast(@intFromPtr(boom_name.ptr)), @intCast(boom_name.len), 0, 0, @intCast(@intFromPtr(&out)));
+    try std.testing.expectEqual(@as(i32, -2), rc_panic);
+    n = engine_last_error(h, @intCast(@intFromPtr(&buf)), buf.len);
+    try std.testing.expect(n > 0);
+    try std.testing.expect(std.mem.indexOf(u8, buf[0..@as(usize, @intCast(n))], "IndexOutOfBounds") != null);
+}
+
+// engine_run/engine_run_path/engine_call all route through Runtime paths that
+// check vm_state.sleep_deadline_ns up front and return error.RuntimeSuspended
+// (surfaced here as a runtime_error, code -2) rather than reentering a script
+// that engine_begin left mid-sleep. Confirms the C-ABI wrapper reflects the
+// documented "resume via engine_continue, not engine_run" contract rather
+// than silently clobbering or hanging on the suspended VM state.
+test "engine_run and engine_call refuse to run while the engine is suspended by engine_begin" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src =
+        \\std := import("std")
+        \\std.time.sleep(1000)
+        \\func noop() bool { return true }
+    ;
+    try std.testing.expectEqual(@as(i32, 1), engine_begin(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+
+    // Still suspended: engine_run must refuse rather than reentering.
+    const other_src = "x := 1\n";
+    try std.testing.expectEqual(@as(i32, -2), engine_run(h, @intCast(@intFromPtr(other_src.ptr)), @intCast(other_src.len)));
+    try std.testing.expectEqual(@as(i32, -2), engine_run_path(h, @intCast(@intFromPtr(other_src.ptr)), @intCast(other_src.len), @intCast(@intFromPtr(other_src.ptr)), 0));
+
+    // engine_call also refuses while suspended.
+    var out: ValueWire = undefined;
+    const rc_call = engine_call(h, @intCast(@intFromPtr("noop".ptr)), 4, 0, 0, @intCast(@intFromPtr(&out)));
+    try std.testing.expectEqual(@as(i32, -2), rc_call);
+
+    // The suspended script can still be resumed to completion afterward —
+    // the refused calls above must not have corrupted the suspended state.
+    var guard: u32 = 0;
+    var cont: i32 = 1;
+    while (cont == 1) {
+        guard += 1;
+        try std.testing.expect(guard < 10_000_000);
+        cont = engine_continue(h);
+    }
+    try std.testing.expectEqual(@as(i32, 0), cont);
+}
+
+// engine_begin/engine_continue must support more than a single suspend/resume
+// round trip: a script that sleeps twice should suspend, resume, suspend
+// again, and resume again to completion, with engine_sleep_remaining_ms
+// reporting > 0 during each suspension and 0 once finished.
+test "engine_begin/engine_continue supports multiple sequential sleep/resume cycles" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const src =
+        \\std := import("std")
+        \\std.time.sleep(2)
+        \\std.time.sleep(2)
+    ;
+    var rc = engine_begin(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len));
+    try std.testing.expectEqual(@as(i32, 1), rc);
+    try std.testing.expect(engine_sleep_remaining_ms(h) > 0);
+
+    var suspend_count: u32 = 0;
+    var guard: u32 = 0;
+    while (rc == 1) {
+        guard += 1;
+        try std.testing.expect(guard < 10_000_000);
+        rc = engine_continue(h);
+        if (rc == 1) {
+            // Each time continueRun() reports .suspended again (the second
+            // sleep() call), sleep_remaining_ms should still read positive.
+            if (engine_sleep_remaining_ms(h) > 0) suspend_count += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(i32, 0), rc);
+    try std.testing.expectEqual(@as(i64, 0), engine_sleep_remaining_ms(h));
+    // Sanity: we actually observed at least one additional suspension beyond
+    // the first engine_begin() call (proving this exercised a second
+    // sleep/resume cycle, not just the first sleep draining to completion).
+    try std.testing.expect(suspend_count > 0);
+}
+
+// engine_set_trace_fn must support unregistering (passing null clears both
+// the callback and its userdata), and a still-registered trace callback must
+// keep firing across engine_reset — engine_reset only clears globals/error
+// state, not the per-engine trace_fn/trace_userdata fields.
+test "engine_set_trace_fn supports clearing via null and survives engine_reset" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    const Ctx = struct {
+        count: usize = 0,
+        fn cb(userdata: ?*anyopaque, _: i32, _: i32, _: i32) callconv(.c) void {
+            const self = @as(*@This(), @ptrCast(@alignCast(userdata.?)));
+            self.count += 1;
+        }
+    };
+    var ctx: Ctx = .{};
+    engine_set_trace_fn(h, Ctx.cb, &ctx);
+
+    const src = "a := 1\nb := 2\n";
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+    try std.testing.expectEqual(@as(usize, 2), ctx.count);
+
+    // Clear via null: no further calls even though the engine keeps running.
+    engine_set_trace_fn(h, null, null);
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+    try std.testing.expectEqual(@as(usize, 2), ctx.count); // unchanged
+
+    // Re-register, then confirm the callback survives engine_reset.
+    ctx.count = 0;
+    engine_set_trace_fn(h, Ctx.cb, &ctx);
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+    try std.testing.expectEqual(@as(usize, 2), ctx.count);
+
+    engine_reset(h);
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr(src.ptr)), @intCast(src.len)));
+    // Trace still fires post-reset: total count keeps accumulating rather
+    // than resetting to 0 or stopping.
+    try std.testing.expectEqual(@as(usize, 4), ctx.count);
+}
+
+// engine_get_global/engine_list_globals/engine_list_functions on a program
+// that defines no globals at all: must report "not found"/empty rather than
+// crashing on an empty globals table.
+// A truly empty program still compiles with the standard library's constant
+// prelude (e.g. "module:std.math.pi") pre-registered as globals — these are
+// compiler-injected so any module compiled later that references
+// `std.math.pi` etc. resolves to a stable global slot regardless of which
+// file references it, not user-visible script state. So "empty" here means
+// no USER-defined globals or callable functions, not a literally-empty
+// globals table.
+fn isPreludeGlobalName(name: []const u8) bool {
+    // "module:std.*" constants and "@std_script:*" embedded-Gengoscript std
+    // helpers (e.g. std.array.count) are compiler-injected into every
+    // compiled program's global table regardless of script content — not
+    // user-visible script state.
+    return std.mem.startsWith(u8, name, "module:") or std.mem.startsWith(u8, name, "@std_script:");
+}
+
+test "engine_get_global, engine_list_globals, and engine_list_functions on an empty program" {
+    const h = engine_init();
+    try std.testing.expect(h > 0);
+    defer engine_destroy(h);
+
+    try std.testing.expectEqual(0, engine_run(h, @intCast(@intFromPtr("".ptr)), 0));
+
+    var wire: ValueWire = undefined;
+    const missing = "anything";
+    try std.testing.expectEqual(@as(i32, -2), engine_get_global(h, @intCast(@intFromPtr(missing.ptr)), @intCast(missing.len), @intCast(@intFromPtr(&wire))));
+
+    const Ctx = struct {
+        non_prelude_globals: usize = 0,
+        non_prelude_funcs: usize = 0,
+        fn globalsCb(userdata: ?*anyopaque, name_ptr: [*]const u8, name_len: i32, _: *const ValueWire) callconv(.c) void {
+            const self = @as(*@This(), @ptrCast(@alignCast(userdata.?)));
+            const name = name_ptr[0..@as(usize, @intCast(name_len))];
+            if (!isPreludeGlobalName(name)) self.non_prelude_globals += 1;
+        }
+        fn funcsCb(userdata: ?*anyopaque, name_ptr: [*]const u8, name_len: i32, _: i32) callconv(.c) void {
+            const self = @as(*@This(), @ptrCast(@alignCast(userdata.?)));
+            const name = name_ptr[0..@as(usize, @intCast(name_len))];
+            if (!isPreludeGlobalName(name)) self.non_prelude_funcs += 1;
+        }
+    };
+    var ctx: Ctx = .{};
+    try std.testing.expectEqual(0, engine_list_globals(h, Ctx.globalsCb, &ctx));
+    try std.testing.expectEqual(0, engine_list_functions(h, Ctx.funcsCb, &ctx));
+    try std.testing.expectEqual(@as(usize, 0), ctx.non_prelude_globals);
+    try std.testing.expectEqual(@as(usize, 0), ctx.non_prelude_funcs);
+}

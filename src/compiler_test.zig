@@ -12514,6 +12514,397 @@ test "a script that calls std.time.sleep twice resumes correctly across each sus
     try std.testing.expectEqual(@as(i64, 2), result.int);
 }
 
+// --- std.time coverage sweep (time.zig) -------------------------------
+// Everything below drives std.time purely through Gengo scripts. The
+// anchor timestamp 1709622489123 ms is 2024-03-05 07:08:09.123 UTC, a
+// Tuesday, hand-derived from the civil-calendar algorithm the compiler
+// uses internally (days since 1970-01-01 = 31(Jan)+29(Feb, 2024 is a
+// leap year)+4 = 64 days -> 1704067200 + 64*86400 = 1709596800s, plus
+// 07:08:09 = 25689s -> 1709622489s, plus .123).
+
+test "compiler: std.time.format renders every supported directive against a known date/time" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\t := std.time.from_unix_ms(1709622489123)
+        \\assert t.format("%Y-%m-%d %H:%M:%S.%L") == "2024-03-05 07:08:09.123"
+        \\assert t.format("%A %a %B %b") == "Tuesday Tue March Mar"
+        \\assert t.format("100%%") == "100%"
+        \\p := t.parts()
+        \\assert p.weekday == 2
+    );
+}
+
+test "compiler: std.time.format renders negative years with a leading minus sign and zero-padded magnitude" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\epoch := std.time.from_unix_ms(0)
+        \\neg := epoch.add_date(-1972, 0, 0)
+        \\assert neg.format("%Y-%m-%d") == "-0002-01-01"
+    );
+}
+
+// %Q isn't a recognized directive (error.TypeError), and the internal
+// 512-byte scratch buffer must reject a rendered string that overflows it
+// (error.NoSpaceLeft) rather than corrupting memory.
+test "compiler: std.time.format rejects an unknown directive and raises NoSpaceLeft once the rendered string exceeds its internal buffer" {
+    var rt = try setup();
+    defer rt.deinit();
+    const long_fmt = "x" ** 600;
+    const src = "std := import(\"std\")\n" ++
+        "func badVerb() any {\n" ++
+        "    t := std.time.from_unix_ms(0)\n" ++
+        "    return t.format(\"%Q\")\n" ++
+        "}\n" ++
+        "func hugeFmt() any {\n" ++
+        "    t := std.time.from_unix_ms(0)\n" ++
+        "    return t.format(\"" ++ long_fmt ++ "\")\n" ++
+        "}\n";
+    try runSrc(&rt, src);
+    try std.testing.expectError(error.TypeError, rt.callGlobal("badVerb", &.{}));
+    try std.testing.expectError(error.NoSpaceLeft, rt.callGlobal("hugeFmt", &.{}));
+}
+
+test "compiler: std.time.parse parses %Y/%m/%d/%H/%M/%S/%L, two-digit years, month/weekday names, and ignores %W's payload" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\t := std.time.parse("2024-03-05 07:08:09.123", "%Y-%m-%d %H:%M:%S.%L")
+        \\assert t.unix_ms() == 1709622489123.0
+        \\t2 := std.time.parse("24-03-05", "%y-%m-%d")
+        \\p2 := t2.parts()
+        \\assert p2.year == 2024
+        \\assert p2.month == 3
+        \\assert p2.day == 5
+        \\t3 := std.time.parse("Tuesday, March 05 2024", "%a, %B %d %Y")
+        \\p3 := t3.parts()
+        \\assert p3.year == 2024
+        \\assert p3.month == 3
+        \\assert p3.day == 5
+        \\t4 := std.time.parse("2024-01-01-XY", "%Y-%m-%d-%W")
+        \\p4 := t4.parts()
+        \\assert p4.year == 2024
+        \\assert p4.month == 1
+        \\assert p4.day == 1
+    );
+}
+
+// %d/%m only range-check against [1,31]/[1,12] — they don't cross-check
+// against the actual days-in-month, so an out-of-range-for-its-month day
+// like Feb 30 is accepted and rolls forward via the same civil-calendar
+// arithmetic add_date uses (Feb 2024 has 29 days, so day 30 = Mar 1).
+// This is a real characteristic of the implementation, not a crash.
+test "compiler: std.time.parse does not validate day-of-month against the actual month, so Feb 30 rolls over into March" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\t := std.time.parse("2024-02-30", "%Y-%m-%d")
+        \\p := t.parts()
+        \\assert p.year == 2024
+        \\assert p.month == 3
+        \\assert p.day == 1
+    );
+}
+
+test "compiler: std.time.parse raises TypeError on malformed input and RangeError on out-of-range numeric components" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func mismatchLiteral() any { return std.time.parse("2024/03/05", "%Y-%m-%d") }
+        \\func tooShort() any { return std.time.parse("2024-03-0", "%Y-%m-%d") }
+        \\func trailingExtra() any { return std.time.parse("2024X", "%Y") }
+        \\func nonDigitMonth() any { return std.time.parse("ab", "%m") }
+        \\func monthOutOfRange() any { return std.time.parse("13", "%m") }
+        \\func monthZero() any { return std.time.parse("00", "%m") }
+        \\func dayOutOfRange() any { return std.time.parse("32", "%d") }
+        \\func dayZero() any { return std.time.parse("00", "%d") }
+        \\func hourOutOfRange() any { return std.time.parse("24", "%H") }
+        \\func minOutOfRange() any { return std.time.parse("60", "%M") }
+        \\func secOutOfRange() any { return std.time.parse("60", "%S") }
+        \\func unknownSpec() any { return std.time.parse("x", "%Q") }
+        \\func trailingPercent() any { return std.time.parse("abcX", "abc%") }
+        \\func badMonthName() any { return std.time.parse("Foo", "%B") }
+        \\func badWeekdayName() any { return std.time.parse("Foo", "%a") }
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("mismatchLiteral", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("tooShort", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("trailingExtra", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("nonDigitMonth", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("monthOutOfRange", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("monthZero", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("dayOutOfRange", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("dayZero", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("hourOutOfRange", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("minOutOfRange", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("secOutOfRange", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("unknownSpec", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("trailingPercent", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("badMonthName", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("badWeekdayName", &.{}));
+}
+
+// add_date rolls calendar-invalid results FORWARD/BACKWARD rather than
+// clamping (e.g. Jan 31 + 1 month becomes Mar 3, not Feb 28/29) — this
+// exercises the day/month normalization loops for both overflow and
+// underflow, across year boundaries, and across the mod-4/mod-100/mod-400
+// leap-year rule (1900 is NOT a leap year, 2000 IS).
+test "compiler: std.time.add_date rolls calendar-invalid results forward/backward instead of clamping (month-end, leap years, year boundaries)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\jan31 := std.time.parse("2023-01-31", "%Y-%m-%d")
+        \\rolled := jan31.add_date(0, 1, 0)
+        \\rp := rolled.parts()
+        \\assert rp.year == 2023
+        \\assert rp.month == 3
+        \\assert rp.day == 3
+        \\dec2023 := std.time.parse("2023-12-15", "%Y-%m-%d")
+        \\nextYear := dec2023.add_date(0, 1, 0)
+        \\np := nextYear.parts()
+        \\assert np.year == 2024
+        \\assert np.month == 1
+        \\assert np.day == 15
+        \\jan2024 := std.time.parse("2024-01-15", "%Y-%m-%d")
+        \\prevYear := jan2024.add_date(0, -1, 0)
+        \\pp := prevYear.parts()
+        \\assert pp.year == 2023
+        \\assert pp.month == 12
+        \\assert pp.day == 15
+        \\jan29leap := std.time.parse("2024-01-29", "%Y-%m-%d")
+        \\feb29 := jan29leap.add_date(0, 1, 0)
+        \\fp := feb29.parts()
+        \\assert fp.year == 2024
+        \\assert fp.month == 2
+        \\assert fp.day == 29
+        \\feb29from := std.time.parse("2024-02-29", "%Y-%m-%d")
+        \\nextFeb := feb29from.add_date(1, 0, 0)
+        \\nfp := nextFeb.parts()
+        \\assert nfp.year == 2025
+        \\assert nfp.month == 3
+        \\assert nfp.day == 1
+        \\mar1 := std.time.parse("2023-03-01", "%Y-%m-%d")
+        \\backOneDay := mar1.add_date(0, 0, -1)
+        \\bp := backOneDay.parts()
+        \\assert bp.year == 2023
+        \\assert bp.month == 2
+        \\assert bp.day == 28
+        \\jan1900 := std.time.parse("1900-01-31", "%Y-%m-%d")
+        \\rolled1900 := jan1900.add_date(0, 1, 0)
+        \\r1900 := rolled1900.parts()
+        \\assert r1900.year == 1900
+        \\assert r1900.month == 3
+        \\assert r1900.day == 3
+        \\jan2000 := std.time.parse("2000-01-31", "%Y-%m-%d")
+        \\rolled2000 := jan2000.add_date(0, 1, 0)
+        \\r2000 := rolled2000.parts()
+        \\assert r2000.year == 2000
+        \\assert r2000.month == 3
+        \\assert r2000.day == 2
+        \\jan1_2024 := std.time.parse("2024-01-01", "%Y-%m-%d")
+        \\backFar := jan1_2024.add_date(0, 0, -40)
+        \\bf := backFar.parts()
+        \\assert bf.year == 2023
+        \\assert bf.month == 11
+        \\assert bf.day == 22
+        \\dec15_2023 := std.time.parse("2023-12-15", "%Y-%m-%d")
+        \\overflowYear := dec15_2023.add_date(0, 0, 20)
+        \\oy := overflowYear.parts()
+        \\assert oy.year == 2024
+        \\assert oy.month == 1
+        \\assert oy.day == 4
+    );
+}
+
+// The dispatch-level i32 bounds check (on the raw y/m/d arguments) and
+// timeAddDate's own @addWithOverflow guards (on year+delta/month+delta/
+// day+delta, which can overflow i32 even when each operand individually
+// fits) are two distinct RangeError sources — both must be reachable.
+test "compiler: std.time.add_date raises RangeError both at the dispatch i32-bounds check and from internal year/month/day overflow" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func yTooBig() any { t := std.time.from_unix_ms(0); return t.add_date(9223372036854775807, 0, 0) }
+        \\func yOverflowInternal() any { t := std.time.from_unix_ms(0); return t.add_date(2147483647, 0, 0) }
+        \\func mOverflowInternal() any { t := std.time.from_unix_ms(0); return t.add_date(0, 2147483647, 0) }
+        \\func dOverflowInternal() any { t := std.time.from_unix_ms(0); return t.add_date(0, 0, 2147483647) }
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("yTooBig", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("yOverflowInternal", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("mOverflowInternal", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("dOverflowInternal", &.{}));
+}
+
+// ISO 8601 week numbering: week 1 is the week containing the year's first
+// Thursday, so Jan 1 can fall in the PRIOR year's week 52/53 (2023-01-01,
+// a Sunday, is week 52 of 2022) and Dec 31 can fall in the NEXT year's
+// week 1 (2018-12-31, a Monday, is week 1 of 2019) — both are real,
+// independently-verifiable historical dates.
+test "compiler: std.time.iso_week computes ISO 8601 week numbers, including year-boundary weeks that belong to the adjacent year" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\a := std.time.parse("2024-01-01", "%Y-%m-%d")
+        \\aw := a.iso_week()
+        \\assert aw.year == 2024
+        \\assert aw.week == 1
+        \\b := std.time.parse("2023-01-01", "%Y-%m-%d")
+        \\bw := b.iso_week()
+        \\assert bw.year == 2022
+        \\assert bw.week == 52
+        \\c := std.time.parse("2018-12-31", "%Y-%m-%d")
+        \\cw := c.iso_week()
+        \\assert cw.year == 2019
+        \\assert cw.week == 1
+        \\d := std.time.parse("2024-06-15", "%Y-%m-%d")
+        \\dw := d.iso_week()
+        \\assert dw.year == 2024
+        \\assert dw.week == 24
+    );
+}
+
+test "compiler: std.time.parse_duration parses single/multi-unit, fractional, signed durations and every recognized unit suffix" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func singleUnit() float { return std.time.parse_duration("45s") }
+        \\func multiUnit() float { return std.time.parse_duration("1h30m45s") }
+        \\func fractional() float { return std.time.parse_duration("1.5h") }
+        \\func negative() float { return std.time.parse_duration("-1h30m") }
+        \\func positiveSign() float { return std.time.parse_duration("+5s") }
+        \\func bareZero() float { return std.time.parse_duration("0") }
+        \\func trailingDot() float { return std.time.parse_duration("1.s") }
+        \\func nanoseconds() float { return std.time.parse_duration("1000000ns") }
+        \\func microsAscii() float { return std.time.parse_duration("500us") }
+        \\func microsMicroSign() float { return std.time.parse_duration("500µs") }
+        \\func microsGreekMu() float { return std.time.parse_duration("500μs") }
+        \\func milliseconds() float { return std.time.parse_duration("250ms") }
+        \\func minutes() float { return std.time.parse_duration("2m") }
+        \\func hours() float { return std.time.parse_duration("3h") }
+    );
+    const tol = 1e-9;
+    try std.testing.expectApproxEqAbs(@as(f64, 45_000.0), (try rt.callGlobal("singleUnit", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 5_445_000.0), (try rt.callGlobal("multiUnit", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 5_400_000.0), (try rt.callGlobal("fractional", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, -5_400_000.0), (try rt.callGlobal("negative", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 5_000.0), (try rt.callGlobal("positiveSign", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), (try rt.callGlobal("bareZero", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 1_000.0), (try rt.callGlobal("trailingDot", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), (try rt.callGlobal("nanoseconds", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.5), (try rt.callGlobal("microsAscii", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.5), (try rt.callGlobal("microsMicroSign", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.5), (try rt.callGlobal("microsGreekMu", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 250.0), (try rt.callGlobal("milliseconds", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 120_000.0), (try rt.callGlobal("minutes", &.{})).float, tol);
+    try std.testing.expectApproxEqAbs(@as(f64, 10_800_000.0), (try rt.callGlobal("hours", &.{})).float, tol);
+}
+
+test "compiler: std.time.parse_duration raises ParseError on malformed input (empty, bad unit, no digits, bare sign)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func empty() float { return std.time.parse_duration("") }
+        \\func noDigits() float { return std.time.parse_duration("h") }
+        \\func badUnit() float { return std.time.parse_duration("10x") }
+        \\func bareSign() float { return std.time.parse_duration("-") }
+        \\func barePlus() float { return std.time.parse_duration("+") }
+    );
+    try std.testing.expectError(error.ParseError, rt.callGlobal("empty", &.{}));
+    try std.testing.expectError(error.ParseError, rt.callGlobal("noDigits", &.{}));
+    try std.testing.expectError(error.ParseError, rt.callGlobal("badUnit", &.{}));
+    try std.testing.expectError(error.ParseError, rt.callGlobal("bareSign", &.{}));
+    try std.testing.expectError(error.ParseError, rt.callGlobal("barePlus", &.{}));
+}
+
+test "compiler: std.time object methods (add_h/add_m/add_s/add_ms, before/after/equal, is_zero, sub, unix/unix_ms) reach their native dispatch" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\t1 := std.time.from_unix_ms(1000)
+        \\h1 := t1.add_h(1)
+        \\assert h1.unix_ms() == 3601000.0
+        \\m1 := t1.add_m(1)
+        \\assert m1.unix_ms() == 61000.0
+        \\s1 := t1.add_s(1)
+        \\assert s1.unix_ms() == 2000.0
+        \\ms1 := t1.add_ms(500)
+        \\assert ms1.unix_ms() == 1500.0
+        \\t2 := std.time.from_unix_ms(2000)
+        \\assert t1.before(t2) == true
+        \\assert t2.after(t1) == true
+        \\assert t1.equal(t1) == true
+        \\assert t1.equal(t2) == false
+        \\assert t2.sub(t1) == 1000.0
+        \\assert t1.is_zero() == false
+        \\zero := std.time.from_unix_ms(0)
+        \\assert zero.is_zero() == true
+        \\t3 := std.time.from_unix_ms(1500)
+        \\assert t3.unix() == 1
+        \\t4 := std.time.from_unix(2)
+        \\assert t4.unix_ms() == 2000.0
+    );
+}
+
+test "compiler: std.time.now/since/until execute via native dispatch and produce sane relative durations" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\t := std.time.now()
+        \\assert t.since() >= 0.0
+        \\future := t.add_h(1)
+        \\assert future.until() > 0.0
+        \\assert t.until() <= 0.0
+    );
+}
+
+// timeGetMs unboxes a named Time value down to its underlying float/int
+// before this switch ever runs, so the switch's own '.object' arm is only
+// reachable when the argument is some OTHER kind of object entirely (an
+// array here) — a non-Time value passed where a Time is expected. A
+// non-object, non-numeric value (a plain string) instead falls through
+// the outer switch's own 'else' arm.
+test "compiler: std.time methods raise TypeError when passed a non-Time object or non-numeric argument" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func nonTimeArg() any { t := std.time.from_unix_ms(0); return t.equal([1, 2, 3]) }
+        \\func nonNumericArg() any { t := std.time.from_unix_ms(0); return t.equal("nope") }
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("nonTimeArg", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("nonNumericArg", &.{}));
+}
+
+// timeEpochMsToParts guards against a ms value so large it can't be
+// represented as an i64 (e.g. 1e20 >= 2^63), returning the zeroed epoch
+// instead of an @intFromFloat panic.
+test "compiler: std.time.parts on an out-of-i64-range ms value returns the zeroed epoch instead of crashing" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\huge := std.time.from_unix_ms(1e20)
+        \\p := huge.parts()
+        \\assert p.year == 0
+        \\assert p.month == 1
+        \\assert p.day == 1
+        \\assert p.hour == 0
+        \\assert p.weekday == 0
+    );
+}
+
 // Runtime.reset() is called internally by every run()/runPath(), so its
 // lines are technically already exercised — but nothing ever called it
 // EXPLICITLY and then verified a previous script's global genuinely
@@ -13672,4 +14063,870 @@ test "compiler: interface method dispatch re-resolves per call when the same cal
     try std.testing.expectEqualStrings("square", square_result2.string.bytes);
     const circle_result2 = try rt2.callGlobal("describeCircle", &.{});
     try std.testing.expectEqualStrings("circle", circle_result2.string.bytes);
+}
+
+// ── Second coverage-audit pass on compiler_stmts.zig, 2026-08-25 ───────────
+// A prior pass covered switch-statement edge cases, defer edge cases,
+// multi-bind edge cases, property-assign, and C-style for. This pass reads
+// the kcov-reported 155 still-uncovered lines directly and closes as many
+// as are reachable from ordinary (non-refactoring) black-box source, while
+// documenting a few that turn out to be unreachable dead code.
+
+// cForStmt's init-clause branches: an explicit `i TYPE = expr` (no ':='),
+// via isTypedVarDecl(), had no coverage anywhere in this file or the spec
+// corpus.
+test "compiler: C-style for loop with a typed-var-decl init clause (no ':=')" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() int {
+        \\    sum := 0
+        \\    for i int = 0; i < 3; i++ {
+        \\        sum += i
+        \\    }
+        \\    return sum
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 3), result.int);
+}
+
+// cForStmt's `const` init-clause branch.
+test "compiler: C-style for loop with a 'const' init clause" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() int {
+        \\    n := 0
+        \\    for const start = 5; n < start; n++ {
+        \\    }
+        \\    return n
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 5), result.int);
+}
+
+// cForStmt's remaining fallback branches: a plain-expression init clause
+// (neither decl nor assign), a plain '=' assignment in the post clause
+// (instead of '++' or a compound op), and a plain-expression post clause
+// (a bare call, neither '++' nor an assignment).
+test "compiler: C-style for loop with a plain-expression init clause, an '=' post clause, and a call-expression post clause" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func noop() int { return 0 }
+        \\func exprInit() int {
+        \\    i := 0
+        \\    for noop(); i < 3; i++ {
+        \\    }
+        \\    return i
+        \\}
+        \\func assignPost() int {
+        \\    i := 0
+        \\    for ; i < 3; i = i + 1 {
+        \\    }
+        \\    return i
+        \\}
+        \\func exprPost() int {
+        \\    i := 0
+        \\    for ; i < 3; noop() {
+        \\        i = i + 1
+        \\    }
+        \\    return i
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 3), (try rt.callGlobal("exprInit", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 3), (try rt.callGlobal("assignPost", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 3), (try rt.callGlobal("exprPost", &.{})).int);
+}
+
+// ifStmtDepth mirrors cForStmt's init-clause dispatch but had NO coverage
+// at all for any branch except the plain ':=' case (tests/spec/010).
+test "compiler: if-statement with a typed-var-decl init clause (no ':=')" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() int {
+        \\    if x int = 5; x > 0 {
+        \\        return x
+        \\    }
+        \\    return -1
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 5), result.int);
+}
+
+test "compiler: if-statement with a 'const' init clause" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() int {
+        \\    if const limit = 7; limit > 5 {
+        \\        return limit
+        \\    }
+        \\    return -1
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 7), result.int);
+}
+
+test "compiler: if-statement with a plain assignment init clause and a plain-expression init clause" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func noop() int { return 0 }
+        \\func assignInit() int {
+        \\    i := 0
+        \\    if i = 9; i > 0 {
+        \\        return i
+        \\    }
+        \\    return -1
+        \\}
+        \\func exprInit() int {
+        \\    if noop(); true {
+        \\        return 42
+        \\    }
+        \\    return -1
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 9), (try rt.callGlobal("assignInit", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 42), (try rt.callGlobal("exprInit", &.{})).int);
+}
+
+// compileFuncWithPrefix: a non-literal default parameter value.
+test "compiler: a function parameter default value that is not a literal is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt, "func f(x int = y) int { return x }\n");
+    try std.testing.expectEqual(error.UnexpectedToken, r.err);
+}
+
+// compileFuncWithPrefix: more than MaxLocals ordinary parameters.
+test "compiler: a function with more than MaxLocals parameters is a compile error (TooManyParams)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func manyParams(");
+    var i: u32 = 0;
+    var buf: [32]u8 = undefined;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        if (i > 0) try src.appendSlice(std.testing.allocator, ", ");
+        const piece = try std.fmt.bufPrint(&buf, "p{d} int", .{i});
+        try src.appendSlice(std.testing.allocator, piece);
+    }
+    try src.appendSlice(std.testing.allocator, ") int { return 0 }\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyParams, r.err);
+}
+
+// compileFuncWithPrefix: more than MaxLocals anonymous return types.
+test "compiler: a function with more than MaxLocals return types is a compile error (TooManyParams)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func manyReturns() (");
+    var i: u32 = 0;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        if (i > 0) try src.appendSlice(std.testing.allocator, ", ");
+        try src.appendSlice(std.testing.allocator, "int");
+    }
+    try src.appendSlice(std.testing.allocator, ") {\n    return\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyParams, r.err);
+}
+
+// compileFuncWithPrefix: a named return whose name shadows a type name.
+test "compiler: a named return value using a type name as its name is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt, "func f() (int int) { return 0 }\n");
+    try std.testing.expectEqual(error.UnexpectedToken, r.err);
+}
+
+// compileFuncWithPrefix: a named return whose name conflicts with a param.
+test "compiler: a named return value whose name conflicts with a parameter name is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt, "func f(x int) (x int) { return }\n");
+    try std.testing.expectEqual(error.DuplicateLocal, r.err);
+}
+
+// compileFuncWithPrefix's named-return zero-init switch has an arm for
+// rune (the decimal_t arm is unreachable dead code -- see the "decimal" NOTE
+// elsewhere in this file; a bare `decimal` type annotation is rejected
+// everywhere it could appear, so a decimal-typed named return can never be
+// constructed from source).
+test "compiler: a bare 'return' from a rune-named-return function returns the implicit zero rune" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() (r rune) {
+        \\    return
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(u21, 0), result.rune);
+}
+
+// compileFuncWithPrefix's prefix loop (method receivers): a receiver named
+// after a builtin type name.
+test "compiler: a method receiver named after a builtin type name is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\type Meters int
+        \\func (int Meters) show() {}
+    );
+    try std.testing.expectEqual(error.UnexpectedToken, r.err);
+}
+
+// compileFuncWithPrefix's predicate-mode param loop: an explicit type
+// annotation (instead of inferring from the base type) plus a trailing
+// comma before ')'.
+test "compiler: a predicate function literal may give its parameter an explicit type annotation with a trailing comma" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Score int predicate func(x int,) { return x >= 0 }
+        \\func f() int { return int(Score(5)) }
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 5), result.int);
+}
+
+// compileFuncWithPrefix: a parameter with no type annotation at all.
+test "compiler: a function parameter without a type annotation is a compile error (ExpectedTypeAnnotation)" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt, "func f(x = 5) int { return x }\n");
+    try std.testing.expectEqual(error.ExpectedTypeAnnotation, r.err);
+}
+
+// deferStmt: a bracket index within the chain, before the final method call.
+test "compiler: defer chain with a bracket index before the final method call" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Counter struct { n int }
+        \\func (c Counter) show() int { return c.n }
+        \\func f() int {
+        \\    items := [Counter{n: 7}, Counter{n: 9}]
+        \\    defer items[0].show()
+        \\    return 1
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 1), result.int);
+}
+
+// deferStmt: the lexer-error passthrough branches for the callee token.
+test "compiler: 'defer' followed immediately by an invalid character is a compile error (InvalidChar)" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\func f() {
+        \\    defer #
+        \\}
+    );
+    try std.testing.expectEqual(error.InvalidChar, r.err);
+}
+
+test "compiler: 'defer' followed immediately by an unterminated string literal is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\func f() {
+        \\    defer "unterminated
+        \\}
+    );
+    try std.testing.expectEqual(error.UnterminatedString, r.err);
+}
+
+test "compiler: 'defer' followed by a bare number literal is a compile error (ExpectedExpression)" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\func f() {
+        \\    defer 5
+        \\}
+    );
+    try std.testing.expectEqual(error.ExpectedExpression, r.err);
+}
+
+// deferStmt's `defer TypeName.method(instance, ...)` rewrite: when the base
+// is a named-type SUBTYPE and the method is declared on the parent type, the
+// direct_named_method lookup must walk the parent chain (not just try the
+// subtype's own qualified name once).
+test "compiler: 'defer SubtypeName.method(instance)' resolves the method inherited from the subtype's parent" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Meters int
+        \\func (m Meters) show() int { return int(m) }
+        \\subtype SmallMeters Meters range 0..100
+        \\func g() int {
+        \\    x := SmallMeters(5)
+        \\    defer SmallMeters.show(x)
+        \\    return 1
+        \\}
+    );
+    const result = try rt.callGlobal("g", &.{});
+    try std.testing.expectEqual(@as(i64, 1), result.int);
+}
+
+// Same rewrite, but the base is a STRUCT type (never a "named type" in the
+// registry's sense), so direct_named_method always returns null and the
+// call must fall back to a dynamic invoke_method.
+test "compiler: 'defer StructType.method(instance)' falls back to a dynamic invoke_method" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Item struct { n int }
+        \\func (it Item) reveal() int { return it.n }
+        \\func h() int {
+        \\    it := Item{n: 7}
+        \\    defer Item.reveal(it)
+        \\    return 2
+        \\}
+    );
+    const result = try rt.callGlobal("h", &.{});
+    try std.testing.expectEqual(@as(i64, 2), result.int);
+}
+
+// deferStmt has three independent "too many arguments to deferred call (max
+// 254)" argument-parsing loops (the type-qualified-call rewrite, the plain
+// dot-method call, and the bare final call) -- none had ANY coverage,
+// including their ordinary (non-overflow) loop bodies.
+test "compiler: 'defer TypeName.method(...)' resolved via the named-type chain rejects more than 254 arguments" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator,
+        \\type Meters int
+        \\func (m Meters) show(n int) int { return n }
+        \\subtype SmallMeters Meters range 0..100
+        \\func g() {
+        \\    x := SmallMeters(5)
+        \\    defer SmallMeters.show(x
+        \\
+    );
+    var i: u32 = 0;
+    while (i < 256) : (i += 1) try src.appendSlice(std.testing.allocator, ", 0");
+    try src.appendSlice(std.testing.allocator, ")\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyElements, r.err);
+}
+
+test "compiler: 'defer instance.method(...)' rejects more than 254 arguments" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator,
+        \\type Widget struct { n int }
+        \\func (w Widget) touch(n int) int { return n }
+        \\func g() {
+        \\    w := Widget{n: 1}
+        \\    defer w.touch(0
+        \\
+    );
+    var i: u32 = 0;
+    while (i < 256) : (i += 1) try src.appendSlice(std.testing.allocator, ", 0");
+    try src.appendSlice(std.testing.allocator, ")\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyElements, r.err);
+}
+
+test "compiler: a plain 'defer bareFunc(...)' call (no property chain) rejects more than 254 arguments" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator,
+        \\func addMany(a int) int { return a }
+        \\func g() {
+        \\    defer addMany(0
+        \\
+    );
+    var i: u32 = 0;
+    while (i < 256) : (i += 1) try src.appendSlice(std.testing.allocator, ", 0");
+    try src.appendSlice(std.testing.allocator, ")\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyElements, r.err);
+}
+
+// emitAssignTargetPath: an index step (number or string) that is an
+// INTERMEDIATE step in a multi-assign target's chain, not the final one --
+// the existing tests/spec/031 coverage only ever uses index steps as the
+// LAST step of a target.
+test "compiler: multi-assign target chains with an index step before the final property access" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() int {
+        \\    obj := { "arr": [ { "x": 0 } ], "m": { "k": { "y": 0 } }, "other": 0 }
+        \\    obj.arr[0].x, obj.m["k"].y, obj.other = 5, 6, 7
+        \\    return obj.arr[0].x + obj.m.k.y + obj.other
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 18), result.int);
+}
+
+// emitExprListTuple: a multi-bind RHS value list with more than 255
+// elements.
+test "compiler: a multi-bind RHS value list longer than 255 elements is a compile error (TooManyElements)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func f() {\n    a, b := 0");
+    var i: u32 = 0;
+    while (i < 256) : (i += 1) try src.appendSlice(std.testing.allocator, ", 0");
+    try src.appendSlice(std.testing.allocator, "\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyElements, r.err);
+}
+
+// forInStmt claims one extra hidden local slot for its iterator object
+// AFTER the loop variable(s) are already registered; when that claim
+// itself would exceed MaxLocals, it has its own explicit check (distinct
+// from defineLocal's).
+test "compiler: for-in loop errors with TooManyLocals when claiming its hidden iterator slot would exceed MaxLocals" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func f() int {\n");
+    var i: u32 = 0;
+    var buf: [32]u8 = undefined;
+    while (i < ct.MaxLocals - 1) : (i += 1) {
+        const line = try std.fmt.bufPrint(&buf, "    v{d} := 0\n", .{i});
+        try src.appendSlice(std.testing.allocator, line);
+    }
+    try src.appendSlice(std.testing.allocator, "    for x in [1, 2, 3] {\n        _ = x\n    }\n    return v0\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyLocals, r.err);
+}
+
+// multiBindStmt's SPREAD-value path (a direct call to a function with a
+// statically-known named_return_count >= 2, matching the target count
+// exactly) had no coverage for either its DECL ('trap'-slot and plain-name)
+// or plain-ASSIGN branches -- every existing multi-return test in this file
+// uses an anonymous-return-type function, which takes the tuple path
+// instead of the spread path.
+test "compiler: a decl multi-bind ('trap, name :=') destructuring a spread (named-return) call" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func namedPair() (a int, b ?int) {
+        \\    a = 5
+        \\    return
+        \\}
+        \\func h() int {
+        \\    x, trap := namedPair()
+        \\    return x
+        \\}
+    );
+    const result = try rt.callGlobal("h", &.{});
+    try std.testing.expectEqual(@as(i64, 5), result.int);
+}
+
+test "compiler: a plain multi-assign ('x, y =') destructuring a spread (named-return) call" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func namedPair2() (a int, b int) {
+        \\    a = 5
+        \\    b = 7
+        \\    return
+        \\}
+        \\func h2() int {
+        \\    x := 0
+        \\    y := 0
+        \\    x, y = namedPair2()
+        \\    return x + y
+        \\}
+    );
+    const result = try rt.callGlobal("h2", &.{});
+    try std.testing.expectEqual(@as(i64, 12), result.int);
+}
+
+// parseAssignTargetList: more than MaxLocals targets in a single plain
+// ('=') multi-assign.
+test "compiler: a plain multi-assign ('=') with more than MaxLocals targets is a compile error (TooManyLocals)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func f() {\n    t0");
+    var i: u32 = 1;
+    var buf: [16]u8 = undefined;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        const piece = try std.fmt.bufPrint(&buf, ", t{d}", .{i});
+        try src.appendSlice(std.testing.allocator, piece);
+    }
+    try src.appendSlice(std.testing.allocator, " = 0");
+    i = 1;
+    while (i <= ct.MaxLocals) : (i += 1) try src.appendSlice(std.testing.allocator, ", 0");
+    try src.appendSlice(std.testing.allocator, "\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyLocals, r.err);
+}
+
+// parseAssignTargetList: a malformed property name in a NON-FIRST target of
+// a multi-assign list (the single-target propertyAssignStmt version of this
+// check was already covered, but this parser is a separate function).
+test "compiler: a malformed property name in a non-first multi-assign target reports ExpectedPropertyName" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\func f() {
+        \\    a := 0
+        \\    b := 0
+        \\    a, b.5 = 1, 2
+        \\}
+    );
+    try std.testing.expectEqual(error.ExpectedPropertyName, r.err);
+}
+
+// parseAssignTargetList: the shared per-statement steps buffer (sized
+// MaxLocals*8) overflowing via a single target's dot chain, and separately
+// via a single target's bracket chain.
+test "compiler: a multi-assign target's dot chain longer than MaxLocals*8 steps is a compile error (TooManyElements)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func f() {\n    a");
+    var i: u32 = 0;
+    while (i < ct.MaxLocals * 8 + 1) : (i += 1) try src.appendSlice(std.testing.allocator, ".f");
+    try src.appendSlice(std.testing.allocator, ", b = 0, 0\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyElements, r.err);
+}
+
+test "compiler: a multi-assign target's bracket chain longer than MaxLocals*8 steps is a compile error (TooManyElements)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func f() {\n    a");
+    var i: u32 = 0;
+    while (i < ct.MaxLocals * 8 + 1) : (i += 1) try src.appendSlice(std.testing.allocator, "[0]");
+    try src.appendSlice(std.testing.allocator, ", b = 0, 0\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyElements, r.err);
+}
+
+// parseNameList: more than MaxLocals names in a single decl (':=')
+// multi-bind.
+test "compiler: a decl multi-bind (':=') with more than MaxLocals names is a compile error (TooManyLocals)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func f() {\n    n0");
+    var i: u32 = 1;
+    var buf: [16]u8 = undefined;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        const piece = try std.fmt.bufPrint(&buf, ", n{d}", .{i});
+        try src.appendSlice(std.testing.allocator, piece);
+    }
+    try src.appendSlice(std.testing.allocator, " := 0");
+    i = 1;
+    while (i <= ct.MaxLocals) : (i += 1) try src.appendSlice(std.testing.allocator, ", 0");
+    try src.appendSlice(std.testing.allocator, "\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyLocals, r.err);
+}
+
+// propertyAssignStmt: a bracket access that is NOT the final step (an
+// intermediate array index before a trailing '.field').
+test "compiler: assigning through 'arr[i].field' exercises the array-then-property assignment path" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Item struct { x int }
+        \\func f() int {
+        \\    items := [Item{x: 1}, Item{x: 2}]
+        \\    items[0].x = 99
+        \\    return items[0].x
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 99), result.int);
+}
+
+// returnStmt: more than 255 comma-separated return values.
+test "compiler: a return statement with more than 255 comma-separated values is a compile error (TooManyElements)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func f() int {\n    return 0");
+    var i: u32 = 0;
+    while (i < 256) : (i += 1) try src.appendSlice(std.testing.allocator, ", 0");
+    try src.appendSlice(std.testing.allocator, "\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyElements, r.err);
+}
+
+// Found while auditing returnStmt: a function whose single declared return
+// type is a struct or variant accepts a comma-separated multi-value
+// `return a, b` without any compile-time type check at all -- the code
+// simply sets scope.all_returns_proven = false (disabling a call-site
+// optimization) and moves on, unlike the analogous single-value primitive-
+// return-type mismatch path, which DOES raise a TypeError. This compiles
+// successfully even though the runtime value actually produced (a 2-tuple)
+// can never be the declared struct/variant type. Reported, not fixed.
+test "compiler: returning multiple comma-separated values from a function declared to return a single struct or variant type compiles without a type error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Pair struct { a int, b int }
+        \\func f() Pair { return 1, 2 }
+        \\type Shape variant { Circle, Square }
+        \\func g() Shape { return 1, 2 }
+    );
+}
+
+// stmt()'s dispatch: 'trap' as the FIRST name in a multi-bind decl (the
+// generic ident-first multi-bind path was already covered, but the
+// trap-first special case at the top of stmt() was not).
+test "compiler: 'trap' as the first name in a multi-bind decl is recognized by stmt()'s dispatch" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func maybeErr() (?int, int) { return null, 42 }
+        \\func f() int {
+        \\    trap, y := maybeErr()
+        \\    return y
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 42), result.int);
+}
+
+// stmt()'s REPL auto-print bookkeeping: repl_pending_pop only ever gets
+// exercised across TWO OR MORE bare expression statements compiled in a
+// SINGLE runIncremental() call (compile() resets it to false at the start
+// of every call), which no existing REPL test in this file did.
+test "compiler: two consecutive bare top-level expression statements in one REPL increment" {
+    var rt_repl = try setupApiRuntime(.{
+        .allow_io = false,
+        .allocator = std.testing.allocator,
+    });
+    defer rt_repl.deinit();
+    const result = rt_repl.runIncremental("1 + 1\n2 + 2");
+    try std.testing.expect(result == .ok);
+}
+
+// switchStmt: more than MaxCaseVals (32) comma-separated values in a single
+// case.
+test "compiler: a switch case with more than 32 comma-separated values is a compile error (TooManySwitchCases)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func f(x int) int {\n    switch x {\n    case 0");
+    var i: u32 = 1;
+    var buf: [16]u8 = undefined;
+    while (i <= 33) : (i += 1) {
+        const piece = try std.fmt.bufPrint(&buf, ", {d}", .{i});
+        try src.appendSlice(std.testing.allocator, piece);
+    }
+    try src.appendSlice(std.testing.allocator, " {\n        return 1\n    }\n    default {\n        return 0\n    }\n    }\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManySwitchCases, r.err);
+}
+
+// switchStmt's non-exhaustive-variant-switch message builder joins 2+
+// missing arm names with ", " -- every existing non-exhaustive-switch test
+// (this file and tests/spec/fail) happens to be missing exactly ONE arm, so
+// the comma-joining branch had no coverage.
+test "compiler: a non-exhaustive variant switch missing 2+ arms joins their names with commas" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\type Status variant { pending, approved, rejected, closed }
+        \\func label(s Status) string {
+        \\    switch s {
+        \\        case .pending { return "pending" }
+        \\    }
+        \\    return ""
+        \\}
+    );
+    try std.testing.expectEqual(error.NonExhaustiveSwitch, r.err);
+    try std.testing.expect(std.mem.indexOf(u8, r.msg, ", ") != null);
+}
+
+// tryTypedArrayLit: a '[]T{...}' composite literal with more than 255
+// elements.
+test "compiler: a '[]T{...}' composite literal with more than 255 elements is a compile error (TooManyElements)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func f() {\n    xs := []int{0");
+    var i: u32 = 0;
+    while (i < 256) : (i += 1) try src.appendSlice(std.testing.allocator, ", 0");
+    try src.appendSlice(std.testing.allocator, "}\n    _ = xs\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyElements, r.err);
+}
+
+// varDecl's kw_func branch (a 'var'-keyword declaration whose type
+// annotation is a func type): with and without an initializer.
+test "compiler: a 'var' declaration with an explicit func-type annotation, with and without an initializer" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func double(n int) int { return n * 2 }
+        \\func useFunc() int {
+        \\    var f func(int) int = double
+        \\    return f(21)
+        \\}
+        \\func declareOnly() bool {
+        \\    var g func(int) int
+        \\    return g == null
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 42), (try rt.callGlobal("useFunc", &.{})).int);
+    try std.testing.expect((try rt.callGlobal("declareOnly", &.{})).boolean);
+}
+
+// varDecl's kw_func branch: a 'const' func-typed decl with no initializer
+// hits the "expected '='" fallback (unlike 'var', const never gets an
+// implicit default).
+test "compiler: 'const f func(...) ...' with no initializer is a compile error (expected '=')" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt, "const f func(int) int\n");
+    try std.testing.expectEqual(error.UnexpectedToken, r.err);
+}
+
+// Regression: varDecl's own type-name resolution switch (the ident branch
+// around "int"/"float"/"bool"/"string"/"rune"/"bigint"/"array"/"map"/
+// "error"/"actor" plus the struct/interface/variant/named registries) used
+// to never special-case "any" -- even though `any` is a fully legitimate
+// type, accepted everywhere else (params, returns, struct fields) via
+// parseFieldTypeSpec. A bare `var x any = 5` therefore fell through every
+// arm of varDecl's own switch and hit its final `else`, reporting "unknown
+// type name 'any'" even though the type spec itself parsed successfully
+// moments earlier. Fixed by adding an "any" arm that leaves
+// inferred_type_check at its default `.none` (no runtime type check,
+// matching parseFieldTypeSpec's own any -> FieldTypeAlt.any mapping).
+// Affects `var`, top-level typed decls, and typed if/for-init decls
+// equally, since they all share this switch.
+test "compiler: 'var x any = ...' accepts and can be reassigned across value kinds" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func f() int {
+        \\    var x any = 5
+        \\    a := x
+        \\    x = "hello"
+        \\    b := x
+        \\    x = [1, 2, 3]
+        \\    c := x
+        \\    return a + std.core.len(b) + std.core.len(c)
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 5 + 5 + 3), (try rt.callGlobal("f", &.{})).int);
+}
+
+// varDecl's cast_bigint epilog: a bigint-typed var initialized from a plain
+// (not-yet-bigint) int literal.
+test "compiler: 'var x bigint = <int literal>' emits the cast_bigint epilog" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() string {
+        \\    var x bigint = 5
+        \\    return string(x)
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqualStrings("5", try vms.asStringValue(result));
+}
+
+// varDecl: a bare nullable type annotation with no initializer implicitly
+// defaults to null.
+test "compiler: 'var x ?int' with no initializer implicitly defaults to null" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() bool {
+        \\    var x ?int
+        \\    return x == null
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expect(result.boolean);
+}
+
+// varDecl: declaring a global with the same name as an existing function.
+test "compiler: declaring a global with the same name as an existing function is a compile error (DuplicateGlobal)" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\func foo() int { return 1 }
+        \\foo := 5
+    );
+    try std.testing.expectEqual(error.DuplicateGlobal, r.err);
+}
+
+// varDecl's REPL-mode redeclaration guards: check_global_exists fires on
+// pure existence (not an actual type comparison), so re-declaring an
+// existing explicitly-typed global via a second incremental compile is
+// always rejected, even with the identical type.
+test "compiler: REPL redeclaring an existing typed global is a compile error (RedeclareGlobal)" {
+    var rt_repl = try setupApiRuntime(.{
+        .allow_io = false,
+        .allocator = std.testing.allocator,
+    });
+    defer rt_repl.deinit();
+    try std.testing.expect(rt_repl.runIncremental("if x int = 5; true { }") == .ok);
+    const result = rt_repl.runIncremental("if x int = 6; true { }");
+    try std.testing.expect(result == .compile_error);
+}
+
+test "compiler: REPL redeclaring an existing const is a compile error (cannot redeclare const)" {
+    var rt_repl = try setupApiRuntime(.{
+        .allow_io = false,
+        .allocator = std.testing.allocator,
+    });
+    defer rt_repl.deinit();
+    try std.testing.expect(rt_repl.runIncremental("const y = 5") == .ok);
+    const result = rt_repl.runIncremental("const y = 10");
+    try std.testing.expect(result == .compile_error);
+}
+
+// varDecl: more than MaxLocals explicitly-typed top-level globals. A bare
+// typed decl (no 'var'/':=') is only reachable via an if/for init clause;
+// at top level (outside any function, and outside cForStmt's in_loop_init),
+// ifStmtDepth's init-clause varDecl call still takes the GLOBAL path, so a
+// run of top-level `if vN TYPE = expr; true { }` statements is the only way
+// to construct this many explicitly-typed globals from source.
+test "compiler: more than MaxLocals typed top-level globals is a compile error (TooManyGlobals)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    var i: u32 = 0;
+    var buf: [48]u8 = undefined;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        const line = try std.fmt.bufPrint(&buf, "if v{d} int = 0; true {{ }}\n", .{i});
+        try src.appendSlice(std.testing.allocator, line);
+    }
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyGlobals, r.err);
 }

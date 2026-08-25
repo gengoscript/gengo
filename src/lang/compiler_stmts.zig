@@ -2396,6 +2396,15 @@ pub fn varDecl(c: anytype, has_keyword: bool, is_const: bool) !void {
                 inferred_type_check = .{ .prim = .rune };
             } else if (common.streq(type_name, "bigint")) {
                 inferred_type_check = .{ .prim = .bigint };
+            } else if (common.streq(type_name, "any")) {
+                // any accepts every value; matches parseFieldTypeSpec's own
+                // "any" case (compiler_decls.zig), which maps it to
+                // FieldTypeAlt.any -- .none is this switch's existing
+                // "no runtime type check" value (already the block's
+                // default and used identically for the bare-nullable case
+                // just below), so `var x any = 5` needs no special
+                // TypeCheck variant of its own, just to not fall through to
+                // the catch-all UnknownTypeName error below.
             } else if (common.streq(type_name, "array")) {
                 return c.err("use '[]T' syntax for array types", .{});
             } else if (common.streq(type_name, "map")) {
