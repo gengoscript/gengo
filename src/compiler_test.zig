@@ -3689,6 +3689,152 @@ test "compiler: std.bytes index_of/contains/starts_with/ends_with/count/replace"
     );
 }
 
+test "compiler: std.bytes.replace is a no-op when the pattern is not found" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\b := std.bytes
+        \\data := b.pack([65, 66, 67, 66, 67])
+        \\assert b.replace(data, b.pack([90]), b.pack([88])) == "ABCBC"
+        \\assert b.replace(data, b.pack([90, 91]), "Z") == "ABCBC"
+    );
+}
+
+// selectStdBytesDecodeIntrinsicOp (compiler.zig) recognizes std.bytes.at and
+// every *_at decoder by exact direct-call name and fuses the call straight
+// into the dedicated .bytes_decode VM opcode at the call site (see
+// compiler_expr.zig), bypassing native/bytes.zig's dispatch() entirely --
+// exactly like std.math's abs/sqrt/etc intrinsics above. Every existing
+// `b.u16be_at(...)`-shaped test in this file therefore exercises only
+// decodeAt() (shared with the VM op) and never bytes.zig's own
+// .bytes_at/.bytes_u16be_at/.../.bytes_f64le_at dispatch arms. Binding the
+// function to a global first (`f := std.bytes.at`) makes the subsequent
+// `f(...)` an indirect call through a function value, which the intrinsic
+// selector never sees (it matches by direct-call name only) -- this reaches
+// bytes.zig's real dispatch for the big-endian half of the decode family.
+test "compiler: std.bytes big-endian decode functions (at/u16be_at/u16le_at/u32be_at/u64be_at/f32be_at/f64be_at) reach bytes.zig's real native dispatch via indirect call" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\data := std.bytes.u8(0x12) + std.bytes.u16be(0x3456) + std.bytes.u32be(0x789ABCDE) + std.bytes.u64be(0x0102030405060708) + std.bytes.f32be(3.5) + std.bytes.f64be(2.5)
+        \\at_fn := std.bytes.at
+        \\u16be_at_fn := std.bytes.u16be_at
+        \\u16le_at_fn := std.bytes.u16le_at
+        \\u32be_at_fn := std.bytes.u32be_at
+        \\u64be_at_fn := std.bytes.u64be_at
+        \\f32be_at_fn := std.bytes.f32be_at
+        \\f64be_at_fn := std.bytes.f64be_at
+        \\assert at_fn(data, 0) == 0x12
+        \\assert u16be_at_fn(data, 1) == 0x3456
+        \\assert u16le_at_fn(data, 1) == 0x5634
+        \\assert u32be_at_fn(data, 3) == 0x789ABCDE
+        \\assert u64be_at_fn(data, 7) == 0x0102030405060708
+        \\assert f32be_at_fn(data, 15) == 3.5
+        \\assert f64be_at_fn(data, 19) == 2.5
+    );
+}
+
+// Same as above but for the little-endian half of the decode family
+// (u16le_at/u32le_at/u64le_at/f32le_at/f64le_at), reusing the exact data
+// layout and offsets already proven correct by the fused-op round-trip test
+// ("std.bytes little-endian encoders round-trip through their _at
+// decoders") so only the dispatch path under test is new, not the byte
+// arithmetic.
+test "compiler: std.bytes little-endian decode functions (u16le_at/u32le_at/u64le_at/f32le_at/f64le_at) reach bytes.zig's real native dispatch via indirect call" {
+    var rt = try setup();
+    defer rt.deinit();
+    try rt.run(
+        \\std := import("std")
+        \\data := std.bytes.u16le(0x1234) + std.bytes.u32le(0x89ABCDEF) + std.bytes.u64le(0x0102030405060708) + std.bytes.f32le(3.5) + std.bytes.f64le(2.5)
+        \\u16le_at_fn := std.bytes.u16le_at
+        \\u32le_at_fn := std.bytes.u32le_at
+        \\u64le_at_fn := std.bytes.u64le_at
+        \\f32le_at_fn := std.bytes.f32le_at
+        \\f64le_at_fn := std.bytes.f64le_at
+        \\assert u16le_at_fn(data, 0) == 0x1234
+        \\assert u32le_at_fn(data, 2) == 0x89ABCDEF
+        \\assert u64le_at_fn(data, 6) == 0x0102030405060708
+        \\assert f32le_at_fn(data, 14) == 3.5
+        \\assert f64le_at_fn(data, 18) == 2.5
+    );
+}
+
+test "compiler: std.bytes.at raises RangeError via the real native dispatch (indirect call), not just the fused decode op" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\data := std.bytes.u8(0x12)
+        \\func atOOB() int {
+        \\    f := std.bytes.at
+        \\    return f(data, 9999)
+        \\}
+        \\func atNeg() int {
+        \\    f := std.bytes.at
+        \\    return f(data, -1)
+        \\}
+    );
+    try std.testing.expectError(error.RangeError, rt.callGlobal("atOOB", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("atNeg", &.{}));
+}
+
+// argAsI64 (native/bytes.zig) raises TypeError for any argument that is
+// neither .int nor .float; module_descriptor.zig's bytesExports entries
+// carry no per-parameter type, so the compiler does not reject a
+// non-numeric argument at compile time -- it reaches this runtime check.
+test "compiler: std.bytes.u8 raises TypeError (not a crash) on a non-numeric argument" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func viaStr() string { return std.bytes.u8("x") }
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("viaStr", &.{}));
+}
+
+// bytes_slice's fast path returns a zero-copy string_view when the source is
+// already a GC object (.dyn_string/.string_view); a plain string literal is
+// a .string value with no object header, so it falls through to the slow
+// path that copies via makeBinaryString. None of the slice tests above ever
+// pass a literal directly (they all build the source via b.u8(...)
+// concatenation, which allocates a dyn_string), so this path was unexercised.
+test "compiler: std.bytes.slice copies an immortal string-literal source instead of viewing it" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func validSlice() string { return std.bytes.slice("ABCDE", 1, 4) }
+        \\func negFrom() string { return std.bytes.slice("ABCDE", -1, 2) }
+        \\func toGreaterLen() string { return std.bytes.slice("ABCDE", 0, 99) }
+        \\func fromGreaterTo() string { return std.bytes.slice("ABCDE", 3, 1) }
+    );
+    const valid = try rt.callGlobal("validSlice", &.{});
+    try std.testing.expectEqualStrings("BCD", try vms.asStringValue(valid));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("negFrom", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("toGreaterLen", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("fromGreaterTo", &.{}));
+}
+
+// bytes_slice's .string_view branch (a slice of an existing slice) chases
+// through sv.source to the owning dyn_string rather than re-slicing the view
+// itself directly -- exercised here by slicing an already-sliced value.
+test "compiler: std.bytes.slice on a string_view (a slice of a slice) chases through to the owning object" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func f() string {
+        \\    base := std.bytes.u8(0x41) + std.bytes.u8(0x42) + std.bytes.u8(0x43) + std.bytes.u8(0x44) + std.bytes.u8(0x45)
+        \\    view := base[1:4]
+        \\    return std.bytes.slice(view, 1, 2)
+        \\}
+    );
+    const v = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqualStrings("C", try vms.asStringValue(v));
+}
+
 // A pattern that can match zero characters (a bare anchor, or a nullable
 // quantifier) was rejected everywhere in regexp.zig: `end == i` was
 // treated as "no match", so match/find/find_all/split could never report
@@ -8805,6 +8951,382 @@ test "compiler: std.template.parse raises an error (not a crash) on excessive co
     pos += suffix.len;
     try runSrc(&rt, buf[0..pos]);
     try std.testing.expectError(error.InvalidTemplate, rt.callGlobal("f", &.{}));
+}
+
+// tplValToDynStr formats every scalar value kind template.render can
+// interpolate: int/float use the same "{d}" formatting as std.conv.to_string
+// (whole floats print without a decimal point; fractional floats print their
+// shortest round-trip decimal), bool prints "true"/"false", null prints the
+// literal text "null", and strings pass through verbatim.
+test "compiler: std.template.render interpolates int, float, bool, null and string values" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func f() string {
+        \\    return std.template.render("{{.i}}|{{.f}}|{{.bt}}|{{.bf}}|{{.n}}|{{.s}}", {
+        \\        "i": 42,
+        \\        "f": 3.5,
+        \\        "bt": true,
+        \\        "bf": false,
+        \\        "n": null,
+        \\        "s": "hi",
+        \\    })
+        \\}
+    );
+    const out = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqualStrings("42|3.5|true|false|null|hi", try vms.asStringValue(out));
+}
+
+// tplValToDynStr's .object branch only special-cases dyn_string/string_view
+// (raw strings) and named_value (unwraps to the underlying value); every
+// other object kind — arrays, maps, plain struct instances interpolated
+// directly rather than field-accessed — falls through to the "?" fallback.
+// This is a real limitation worth pinning down: there is no auto-serialization
+// of composite values in this template engine.
+test "compiler: std.template.render prints the literal '?' fallback for array and map values interpolated directly" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func f() string {
+        \\    return std.template.render("{{.arr}}|{{.m}}", {
+        \\        "arr": [1, 2, 3],
+        \\        "m": {"x": 1},
+        \\    })
+        \\}
+    );
+    const out = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqualStrings("?|?", try vms.asStringValue(out));
+}
+
+// tplResolveField's .struct_instance and .small_struct_instance branches:
+// a struct with <= SmallStructMaxFields (4) fields is stored inline as
+// small_struct_instance; a struct with more fields falls back to the
+// MapEntry-based struct_instance representation. Both must resolve field
+// names the same way when used directly as template data (not wrapped in
+// a map).
+test "compiler: std.template.render resolves field access directly on struct data (small and regular struct_instance)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Point struct { x int, y int }
+        \\type Big struct { a int, b int, c int, d int, e int }
+        \\func small() string {
+        \\    p := Point{ x: 3, y: 4 }
+        \\    return std.template.render("{{.x}},{{.y}}", p)
+        \\}
+        \\func big() string {
+        \\    v := Big{ a: 1, b: 2, c: 3, d: 4, e: 5 }
+        \\    return std.template.render("{{.e}}-{{.a}}", v)
+        \\}
+    );
+    const small_out = try rt.callGlobal("small", &.{});
+    try std.testing.expectEqualStrings("3,4", try vms.asStringValue(small_out));
+    const big_out = try rt.callGlobal("big", &.{});
+    try std.testing.expectEqualStrings("5-1", try vms.asStringValue(big_out));
+}
+
+// tplResolveField returns .null (rendered as the text "null") rather than
+// raising an error both when the dot itself isn't an object at all (field
+// access on a primitive) and when it is an object but the named field
+// simply doesn't exist. Missing data is silent, not an error.
+test "compiler: std.template.render treats field access on a non-object dot or an unknown field as null, not an error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func nonObjectDot() string {
+        \\    return std.template.render("{{.x}}", 5)
+        \\}
+        \\func unknownField() string {
+        \\    return std.template.render("{{.missing}}", {"a": 1})
+        \\}
+    );
+    const r1 = try rt.callGlobal("nonObjectDot", &.{});
+    try std.testing.expectEqualStrings("null", try vms.asStringValue(r1));
+    const r2 = try rt.callGlobal("unknownField", &.{});
+    try std.testing.expectEqualStrings("null", try vms.asStringValue(r2));
+}
+
+// tplIsArray only returns true for .array/.array_managed — a map is never
+// considered rangeable. range_begin's runtime handling treats "object but
+// not an array" exactly like a false condition: it takes the else branch
+// (or falls straight past to end, with no output, when there's no else).
+// Unlike Go's text/template, {{range}} in this engine cannot iterate a map's
+// key/value pairs at all.
+test "compiler: std.template.range does not iterate map values — it takes the empty/else path instead" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func withElse() string {
+        \\    return std.template.render("{{range .m}}X{{else}}empty{{end}}", {"m": {"a": 1, "b": 2}})
+        \\}
+        \\func withoutElse() string {
+        \\    return std.template.render("{{range .m}}X{{end}}", {"m": {"a": 1}})
+        \\}
+    );
+    const r1 = try rt.callGlobal("withElse", &.{});
+    try std.testing.expectEqualStrings("empty", try vms.asStringValue(r1));
+    const r2 = try rt.callGlobal("withoutElse", &.{});
+    try std.testing.expectEqualStrings("", try vms.asStringValue(r2));
+}
+
+// {{break}} and {{continue}} parse into dedicated TplOp.break_inst/
+// continue_inst opcodes (tplParseTag explicitly recognizes both keywords),
+// but tplExec's switch handles both identically to a plain no-op:
+// `.var_ref, .call_fn, .assign, .break_inst, .continue_inst => { ip += 1; }`.
+// Neither tag has any effect on control flow — a {{break}} inside a
+// {{range}} does not stop the loop, and a {{continue}} does not skip the
+// rest of the current iteration. This is a genuine gap versus what the
+// keywords imply.
+test "compiler: std.template {{break}} and {{continue}} inside range are parsed but have no runtime effect" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func withBreak() string {
+        \\    return std.template.render("{{range .items}}{{.}}{{break}}{{end}}", {"items": ["a", "b", "c"]})
+        \\}
+        \\func withContinue() string {
+        \\    return std.template.render("{{range .items}}{{continue}}{{.}}{{end}}", {"items": ["a", "b"]})
+        \\}
+    );
+    // If {{break}} actually stopped the loop this would be "a", not "abc".
+    const r1 = try rt.callGlobal("withBreak", &.{});
+    try std.testing.expectEqualStrings("abc", try vms.asStringValue(r1));
+    // If {{continue}} actually skipped the rest of the iteration this would
+    // be "" (the {{.}} after it would never run), not "ab".
+    const r2 = try rt.callGlobal("withContinue", &.{});
+    try std.testing.expectEqualStrings("ab", try vms.asStringValue(r2));
+}
+
+// {{$x := expr}} parses into TplOp.assign (tplParseTag only keeps the
+// variable name — the RHS expression is discarded and never stored
+// anywhere), and {{$x}} parses into TplOp.var_ref. Both are no-ops at
+// runtime (same switch arm as break/continue above): there is no variable
+// storage at all in this engine, so a declared "$x" never becomes readable.
+test "compiler: std.template $var assignment and reference are parsed but produce no output (variables are unimplemented)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func f() string {
+        \\    return std.template.render("[{{$x := .a}}{{$x}}]", {"a": "hi"})
+        \\}
+    );
+    const out = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqualStrings("[]", try vms.asStringValue(out));
+}
+
+// The headline finding for this file: std.template.add_func registers a
+// name -> function mapping on the template object's `funcs` field (tplAddFunc
+// really does insert/overwrite/grow that map), but tplExec's `.call_fn` arm
+// is `ip += 1` — the exact same no-op as break/continue/var_ref/assign above.
+// tplEvalExpr, which is the only place that could look up `funcs_v`, receives
+// it as `_funcs_val` and immediately discards it (`_ = _funcs_val;`). So a
+// {{funcName arg}} tag produces empty output unconditionally, whether or not
+// the function was ever registered, and calling an unregistered name is not
+// an error either — custom function calls are entirely non-functional at
+// runtime despite add_func's bookkeeping working correctly in isolation.
+//
+// This test also exercises tplAddFunc's three reachable branches: first
+// registration on the initial empty `.map` (converts to map_managed),
+// re-registering the same name on `.map_managed` (found -> overwrite,
+// returns early), and registering a new name on `.map_managed` (not found ->
+// grow-and-append).
+test "compiler: std.template call_fn tags render as empty output regardless of add_func registration (custom functions are inert)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func addOne(x int) int { return x + 1 }
+        \\func addTwo(x int) int { return x + 2 }
+        \\func registered() string {
+        \\    t := std.template.parse("[{{myFunc .}}]")
+        \\    std.template.add_func(t, "myFunc", addOne)
+        \\    out1 := std.template.execute(t, {})
+        \\    std.template.add_func(t, "myFunc", addTwo)
+        \\    out2 := std.template.execute(t, {})
+        \\    std.template.add_func(t, "other", addOne)
+        \\    out3 := std.template.execute(t, {})
+        \\    return out1 + "|" + out2 + "|" + out3
+        \\}
+        \\func unregistered() string {
+        \\    t := std.template.parse("[{{undefinedFn .}}]")
+        \\    return std.template.execute(t, {})
+        \\}
+    );
+    const r1 = try rt.callGlobal("registered", &.{});
+    try std.testing.expectEqualStrings("[]|[]|[]", try vms.asStringValue(r1));
+    const r2 = try rt.callGlobal("unregistered", &.{});
+    try std.testing.expectEqualStrings("[]", try vms.asStringValue(r2));
+}
+
+// tplValid (tplCountInsts under the hood) only checks that every "{{" has a
+// matching "}}" — it never calls tplParseTag, so it cannot detect a
+// malformed tag body. "{{???}}" is balance-valid but tag-invalid: valid()
+// reports true while parse() on the exact same string raises
+// error.InvalidTemplate. Separately, an empty source string is a degenerate
+// case for tplCountInsts's while loop (it never executes, so count stays 0),
+// making valid("") false — even though parse("")/render("", ...) both
+// succeed and simply produce empty output. valid() and parse() are not the
+// same predicate.
+test "compiler: std.template.valid only checks brace balance, not tag syntax — it disagrees with parse() on malformed tags and on the empty string" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func validSaysOkForBadTag() bool { return std.template.valid("{{???}}") }
+        \\func parseRejectsBadTag() bool {
+        \\    std.template.parse("{{???}}")
+        \\    return true
+        \\}
+        \\func validOnEmpty() bool { return std.template.valid("") }
+        \\func parseOnEmpty() string {
+        \\    t := std.template.parse("")
+        \\    return std.template.execute(t, {})
+        \\}
+        \\func validOnPlainText() bool { return std.template.valid("plain text, no tags") }
+    );
+    const bad_tag_valid = try rt.callGlobal("validSaysOkForBadTag", &.{});
+    try std.testing.expect(bad_tag_valid == .boolean and bad_tag_valid.boolean);
+    try std.testing.expectError(error.InvalidTemplate, rt.callGlobal("parseRejectsBadTag", &.{}));
+
+    const empty_valid = try rt.callGlobal("validOnEmpty", &.{});
+    try std.testing.expect(empty_valid == .boolean and !empty_valid.boolean);
+    const empty_parsed = try rt.callGlobal("parseOnEmpty", &.{});
+    try std.testing.expectEqualStrings("", try vms.asStringValue(empty_parsed));
+
+    const plain_valid = try rt.callGlobal("validOnPlainText", &.{});
+    try std.testing.expect(plain_valid == .boolean and plain_valid.boolean);
+}
+
+// {{with expr}} unconditionally evaluates expr, pushes it as the new dot,
+// and runs its body — there is no falsy/empty check at all (contrast with
+// Go's text/template, where {{with}} skips its body when the value is the
+// zero value). A missing field resolves to .null via tplResolveField, and
+// with_begin still descends into the body with dot == null.
+test "compiler: std.template.with always executes its body, even when the referenced value is missing (null)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func nestedWith() string {
+        \\    return std.template.render("{{with .a}}{{.x}}{{with .y}}{{.}}{{end}}{{end}}", {"a": {"x": "X", "y": "Y"}})
+        \\}
+        \\func withOnMissing() string {
+        \\    return std.template.render("{{with .missing}}shown:{{.}}{{end}}", {"other": 1})
+        \\}
+    );
+    const r1 = try rt.callGlobal("nestedWith", &.{});
+    try std.testing.expectEqualStrings("XY", try vms.asStringValue(r1));
+    // Go's text/template would render "" here (with skips a zero value); this
+    // engine always enters the body.
+    const r2 = try rt.callGlobal("withOnMissing", &.{});
+    try std.testing.expectEqualStrings("shown:null", try vms.asStringValue(r2));
+}
+
+// std.template does no HTML/attribute escaping at all: interpolated string
+// values (including ones containing '<', '>', '&', '"') pass straight
+// through to the output verbatim. Pinned down explicitly since "no escaping"
+// vs. "escapes by default" is exactly the kind of behavior worth confirming
+// with a real test.
+test "compiler: std.template.render does not HTML-escape interpolated string values" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func f() string {
+        \\    return std.template.render("<p>{{.x}}</p>", {"x": "<script>alert(1)</script> & \"quoted\""})
+        \\}
+    );
+    const out = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqualStrings("<p><script>alert(1)</script> & \"quoted\"</p>", try vms.asStringValue(out));
+}
+
+// dispatch's template_execute and template_add_func both reject a first
+// argument that isn't a template object (`if (tmpl_val != .object) return
+// error.TypeError;`), independent of tplExec/tplAddFunc's own logic.
+test "compiler: std.template.execute and std.template.add_func raise TypeError when given a non-template first argument" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func execOnNonTemplate() string { return std.template.execute(5, {}) }
+        \\func addFuncOnNonTemplate() string {
+        \\    std.template.add_func(5, "f", func(x int) int { return x })
+        \\    return "unreached"
+        \\}
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("execOnNonTemplate", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("addFuncOnNonTemplate", &.{}));
+}
+
+// tplExec's {{if}} handler requires the condition to be a genuine bool
+// (`cond.asBool() catch { setRuntimeErr(...); return error.TypeError; }`);
+// an int (or any other non-bool truthy-looking value) is rejected rather
+// than coerced.
+test "compiler: std.template.render raises TypeError when an {{if}} condition is not a bool" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func f() string {
+        \\    return std.template.render("{{if .x}}yes{{end}}", {"x": 1})
+        \\}
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("f", &.{}));
+}
+
+// Regression: tplIsArray (template.zig) checked only `.array`/
+// `.array_managed`, missing `.array_view`/`.array_capacity` -- the exact
+// same cross-representation gap this session's deep_equal fix closed for
+// core.zig. `range` gates on tplIsArray before ever calling
+// tplAsArraySlice (which already correctly handled `.array_capacity`), so
+// {{range .items}} over an array built via std.core.append (always
+// `.array_capacity`, per vm_array.zig's arrayAppend) silently iterated
+// ZERO times -- the whole render produced empty output -- while the exact
+// same data as a plain array LITERAL worked fine. Confirmed via direct
+// CLI repro before fixing: `render(..., items)` returned "" for an
+// appended array but the correct concatenated string for a literal one.
+// Fixed by giving tplIsArray/tplAsArraySlice the complete four-tag switch
+// vm_state.zig's vms.isArrayObject/asArraySlice already use as the
+// canonical array-representation set.
+//
+// This test also exercises tplAppendToBuilder/tplAppendDynStrToBuilder's
+// growth branch (the string_builder's backing buffer must be reallocated
+// at least once as the output accumulates).
+//
+// 50 iterations, not the rounder 500 a first draft used: the -Dpreset=stress
+// build caps max_objects at 512 (config_stress.zig), and every element of
+// the final array is a LIVE dyn_string that must all survive simultaneously
+// (they're reachable from the still-live `items` array) -- 500 of those
+// alone would exceed the whole object pool regardless of GC timing, since
+// GC can only reclaim garbage, not live data. 50 is comfortably within
+// every preset's object budget while still forcing at least one string
+// builder reallocation.
+test "compiler: std.template.range iterates an array built via std.core.append (not just a literal), and grows its output builder repeatedly" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func f() int {
+        \\    items := []
+        \\    i := 0
+        \\    for i < 50 {
+        \\        items = std.core.append(items, "item-" + std.conv.to_string(i) + "-")
+        \\        i = i + 1
+        \\    }
+        \\    out := std.template.render("{{range .items}}{{.}}{{end}}", {"items": items})
+        \\    return std.core.len(out)
+        \\}
+    );
+    const out = try rt.callGlobal("f", &.{});
+    // 10 items (0-9) at 7 bytes + 40 items (10-49) at 8 bytes = 70 + 320 = 390.
+    try std.testing.expectEqual(@as(i64, 390), out.int);
 }
 
 // mapSet's caller (opSetIndex/opSetField) had already popped key/val off the

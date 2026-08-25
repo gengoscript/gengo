@@ -112,13 +112,24 @@ fn tplFieldValue(obj: *Object, name: []const u8) Value {
 }
 
 fn tplIsArray(obj: *Object) bool {
-    return obj.* == .array or obj.* == .array_managed;
+    // Must recognize every array-like Object tag tplAsArraySlice itself
+    // handles below (matches vm_state.zig's canonical vms.isArrayObject
+    // tag set) -- this used to check only .array/.array_managed, so
+    // {{range .}} over an array grown via std.core.append (which is always
+    // .array_capacity, per vm_array.zig's arrayAppend) silently iterated
+    // zero times instead of erroring OR iterating correctly, since the
+    // caller gates on tplIsArray before ever calling tplAsArraySlice.
+    return switch (obj.*) {
+        .array, .array_managed, .array_view, .array_capacity => true,
+        else => false,
+    };
 }
 
 fn tplAsArraySlice(obj: *Object) []Value {
     return switch (obj.*) {
         .array => |a| a,
         .array_managed => |a| a,
+        .array_view => |v| v.items,
         .array_capacity => |a| a.backing.array_managed[0..a.len],
         else => &[_]Value{},
     };
