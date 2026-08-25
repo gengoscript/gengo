@@ -765,6 +765,192 @@ test "compiler: emitModuleObject builds an empty struct for a module whose decla
     try std.testing.expectEqual(vm.RunOutcome.completed, outcome);
 }
 
+// module_compile.zig's beginImportedModule detects a genuine cycle (A imports
+// B while B is still mid-compile importing A back) via findModule seeing the
+// importer's own record still in the `.loading` state, and reports
+// error.ImportCycle. No prior test actually built a real A<->B import cycle.
+test "compiler: a genuine two-file circular import (A imports B, B imports A) fails with ImportCycle" {
+    const a_src =
+        \\b := import("./b")
+        \\pub func fa() int { return 1 }
+    ;
+    const b_src =
+        \\a := import("./a")
+        \\pub func fb() int { return 2 }
+    ;
+    const source_entries = [_]module_compile.SourceEntry{
+        .{ .path = "a.gengo", .source = a_src },
+        .{ .path = "b.gengo", .source = b_src },
+    };
+
+    var rt = try setup();
+    defer rt.deinit();
+
+    try std.testing.expectError(error.ImportCycle, rt.compileOnly(a_src, "a.gengo", .{ .table = &source_entries }));
+}
+
+// Diamond import shape: A imports B and C, and B and C both import the same
+// D. beginImportedModule's findModule dedup must let the second import of D
+// (from C, after B already compiled it) return without recompiling or
+// re-declaring D's exports -- exercised here by having both B and C actually
+// call into D and checking both results are correct.
+test "compiler: diamond import (A imports B and C; B and C both import D) compiles D once and both branches see its exports" {
+    const main_src =
+        \\b := import("./b")
+        \\c := import("./c")
+        \\pub func run() int { return b.viaB() + c.viaC() }
+    ;
+    const b_src =
+        \\d := import("./d")
+        \\pub func viaB() int { return d.base() + 1 }
+    ;
+    const c_src =
+        \\d := import("./d")
+        \\pub func viaC() int { return d.base() + 2 }
+    ;
+    const d_src =
+        \\pub func base() int { return 10 }
+    ;
+    const source_entries = [_]module_compile.SourceEntry{
+        .{ .path = "main.gengo", .source = main_src },
+        .{ .path = "b.gengo", .source = b_src },
+        .{ .path = "c.gengo", .source = c_src },
+        .{ .path = "d.gengo", .source = d_src },
+    };
+
+    var rt = try setup();
+    defer rt.deinit();
+
+    const outcome = try rt.runPathWithSources(main_src, "main.gengo", &source_entries);
+    try std.testing.expectEqual(vm.RunOutcome.completed, outcome);
+    const result = try rt.callGlobal("run", &.{});
+    try std.testing.expectEqual(@as(i64, 23), result.int);
+}
+
+// Importing the same file twice under two different local bindings in one
+// module: compileDependencies' pre-pass import scan dedups the two "./dep"
+// specifiers to a single compile, and the live compiler still evaluates each
+// `import(...)` expression separately -- beginImportedModule's second call
+// must find the already-.compiled record and return null (no recompile, no
+// error), handing back the same module global both times.
+test "compiler: importing the same file twice under different local bindings reuses the compiled module" {
+    const main_src =
+        \\d1 := import("./dep")
+        \\d2 := import("./dep")
+        \\pub func run() int { return d1.value() + d2.value() }
+    ;
+    const dep_src =
+        \\pub func value() int { return 7 }
+    ;
+    const source_entries = [_]module_compile.SourceEntry{
+        .{ .path = "main.gengo", .source = main_src },
+        .{ .path = "dep.gengo", .source = dep_src },
+    };
+
+    var rt = try setup();
+    defer rt.deinit();
+
+    const outcome = try rt.runPathWithSources(main_src, "main.gengo", &source_entries);
+    try std.testing.expectEqual(vm.RunOutcome.completed, outcome);
+    const result = try rt.callGlobal("run", &.{});
+    try std.testing.expectEqual(@as(i64, 14), result.int);
+}
+
+// module_compile.zig's resolveModuleConstant is reachable from
+// compiler_decls.zig's compile-time-constant expression parser, which a
+// named type's `range min..max` bound requires to be resolvable at compile
+// time -- so this exercises resolveModuleConstant with a genuine cross-file
+// `pub const` export, not just a runtime field read.
+test "compiler: a pub const exported from a file-imported module resolves as a compile-time constant for a named type's range bound" {
+    const main_src =
+        \\dep := import("./dep")
+        \\type Meters int range 0..dep.MAX
+        \\pub func boundary() int { return int(Meters(dep.MAX)) }
+    ;
+    const dep_src =
+        \\pub const MAX = 100
+    ;
+    const source_entries = [_]module_compile.SourceEntry{
+        .{ .path = "main.gengo", .source = main_src },
+        .{ .path = "dep.gengo", .source = dep_src },
+    };
+
+    var rt = try setup();
+    defer rt.deinit();
+
+    const outcome = try rt.runPathWithSources(main_src, "main.gengo", &source_entries);
+    try std.testing.expectEqual(vm.RunOutcome.completed, outcome);
+    const result = try rt.callGlobal("boundary", &.{});
+    try std.testing.expectEqual(@as(i64, 100), result.int);
+}
+
+// hasModuleExport's "real compiled module" branch (as opposed to its
+// capability/host-module fallbacks) returns false for both a name that was
+// never declared and a name that was declared but never marked `pub` --
+// exports require the explicit `pub` keyword (see compiler_decls.zig's
+// addExport call sites), so a plain top-level func is invisible across an
+// import boundary.
+test "compiler: accessing an unexported (non-pub) or nonexistent field on a file-imported module is a compile error" {
+    const dep_src =
+        \\pub func exported() int { return 1 }
+        \\func private() int { return 2 }
+    ;
+    const source_entries = [_]module_compile.SourceEntry{
+        .{ .path = "dep.gengo", .source = dep_src },
+    };
+
+    {
+        const main_src =
+            \\dep := import("./dep")
+            \\pub func run() int { return dep.private() }
+        ;
+        var rt = try setup();
+        defer rt.deinit();
+        try std.testing.expectError(error.UnknownField, rt.compileOnly(main_src, "main.gengo", .{ .table = &source_entries }));
+    }
+    {
+        const main_src =
+            \\dep := import("./dep")
+            \\pub func run() int { return dep.nonexistent() }
+        ;
+        var rt = try setup();
+        defer rt.deinit();
+        try std.testing.expectError(error.UnknownField, rt.compileOnly(main_src, "main.gengo", .{ .table = &source_entries }));
+    }
+}
+
+// module_compile.zig's Session.sourceExists/loadSource '.filesystem' arms
+// (real-disk fileExists()/source_io.readFile()) had no direct test coverage:
+// every other multi-file import test in this file uses the in-memory
+// '.table' SourceProvider. This drives a real cross-file import against
+// actual files under a std.testing.tmpDir, matching the disk-file pattern
+// used elsewhere in this codebase (see main.zig's "readSource reads a real
+// file's contents" tests).
+test "compiler: a file import resolves against a real file on disk via the .filesystem provider" {
+    const io_ctx = std.Io.Threaded.global_single_threaded.io();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dep_content = "pub func helper() int { return 42 }";
+    try tmp.dir.writeFile(io_ctx, .{ .sub_path = "dep.gengo", .data = dep_content });
+
+    const main_path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/main.gengo", .{tmp.sub_path});
+    defer std.testing.allocator.free(main_path);
+
+    const main_src =
+        \\dep := import("./dep")
+        \\pub func run() int { return dep.helper() }
+    ;
+
+    var rt = try setup();
+    defer rt.deinit();
+
+    const outcome = try rt.runPath(main_src, main_path);
+    try std.testing.expectEqual(vm.RunOutcome.completed, outcome);
+    const result = try rt.callGlobal("run", &.{});
+    try std.testing.expectEqual(@as(i64, 42), result.int);
+}
+
 test "api runtime: rooted entrypoints agree on compile and runtime error mapping" {
     const bad_src =
         \\func broken( {
@@ -14929,4 +15115,404 @@ test "compiler: more than MaxLocals typed top-level globals is a compile error (
     }
     const r = compileAndInspect(&rt, src.items);
     try std.testing.expectEqual(error.TooManyGlobals, r.err);
+}
+
+// ── io.zig sprintValueDepth / fmtProcess coverage pass ─────────────────────
+//
+// std.fmt.format's generic '%v' verb (fmtProcess in io.zig) delegates to the
+// exact same sprintValue used by print/println/std.fmt.stringify, but every
+// existing '%v' test in this file only ever passed a scalar (int/string/
+// bool) -- never an array or map, so the "does %v correctly measure+write a
+// COMPOSITE value's full nested representation (not just a scalar)" path had
+// no coverage. Also covers fmtInt/fmtFloat receiving a named-type-wrapped
+// value: vms.valueAsInt/valueAsNumber both call unwrapNamed internally, so
+// this is really confirming the existing unwrap behavior is actually
+// exercised through the numeric verb dispatch, not just asserting it works.
+test "compiler: std.fmt.format's %v verb formats composite array/map values, and numeric verbs unwrap named types" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Meter int
+        \\func vArray() string { return std.fmt.format("%v", [1, 2, 3]) }
+        \\func vMap() string { return std.fmt.format("%v", {"a": 1}) }
+        \\func namedDec() string { return std.fmt.format("%d", Meter(7)) }
+        \\func namedHex() string { return std.fmt.format("%x", Meter(255)) }
+    );
+    try std.testing.expectEqualStrings("[1, 2, 3]", try vms.asStringValue(try rt.callGlobal("vArray", &.{})));
+    try std.testing.expectEqualStrings("{a: 1}", try vms.asStringValue(try rt.callGlobal("vMap", &.{})));
+    try std.testing.expectEqualStrings("7", try vms.asStringValue(try rt.callGlobal("namedDec", &.{})));
+    try std.testing.expectEqualStrings("ff", try vms.asStringValue(try rt.callGlobal("namedHex", &.{})));
+}
+
+// sprintValueDepth's .closure and .native_function object arms (rendering
+// "<closure>" and "<native-func>") had no coverage anywhere -- every
+// existing closure/native-function stringification test in this file goes
+// through the *unrelated* string()/std.conv.to_string builtin
+// (nativeConvToString in core.zig), which has no case for either and
+// raises TypeError instead (see "string(...)/std.conv.to_string cover
+// decimal, inline_variant ..., and reject struct/closure" above).
+// std.fmt.stringify drives io.zig's sprintValue directly, so it succeeds
+// here where string() fails on the exact same values.
+//
+// Also covers sprintValueDepth's final `else` fallback arm (renders the
+// literal string "null"): .bigint, .string_builder, and .task_type all
+// have no dedicated case in the object switch (unlike .struct_type/
+// .enum_type/.variant_type/.interface_type/.named_type, which each render
+// a distinct "<kind Name>" placeholder) and so silently fall through to
+// the same "null" placeholder used for the actual null value -- confirmed
+// here rather than assumed, since a prior pass's speculation that these
+// might render as "<iter>"/"<builder>"-style placeholders turned out not
+// to match the real switch at all.
+test "compiler: std.fmt.stringify renders closure/native-function placeholders, and falls back to the bare \"null\" placeholder for bigint/string_builder/task_type" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Worker task func(start int, reply actor) {}
+        \\func closureStr() string {
+        \\    f := func() int { return 1 }
+        \\    return std.fmt.stringify(f)
+        \\}
+        \\func nativeFnStr() string {
+        \\    f := std.bytes.at
+        \\    return std.fmt.stringify(f)
+        \\}
+        \\func bigintStr() string { return std.fmt.stringify(bigint(5)) }
+        \\func stringBuilderStr() string {
+        \\    b := std.string.builder()
+        \\    return std.fmt.stringify(b)
+        \\}
+        \\func taskTypeStr() string { return std.fmt.stringify(Worker) }
+    );
+    try std.testing.expectEqualStrings("<closure>", try vms.asStringValue(try rt.callGlobal("closureStr", &.{})));
+    try std.testing.expectEqualStrings("<native-func>", try vms.asStringValue(try rt.callGlobal("nativeFnStr", &.{})));
+    try std.testing.expectEqualStrings("null", try vms.asStringValue(try rt.callGlobal("bigintStr", &.{})));
+    try std.testing.expectEqualStrings("null", try vms.asStringValue(try rt.callGlobal("stringBuilderStr", &.{})));
+    try std.testing.expectEqualStrings("null", try vms.asStringValue(try rt.callGlobal("taskTypeStr", &.{})));
+}
+
+// sprintValueDepth's .struct_instance arm (the >SmallStructMaxFields heap
+// representation, MapEntry-backed) was only ever exercised via
+// small_struct_instance (<=4 fields) in the earlier "std.fmt.stringify
+// formats struct/array/map/named-error/variant objects" test -- both
+// representations must render identically ("<struct Name>", no fields
+// listed) since sprintValueDepth never actually walks a struct's fields.
+test "compiler: std.fmt.stringify on a wide (>4 field) struct_instance renders the same placeholder as a small_struct_instance" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Wide struct { a int, b int, c int, d int, e int }
+        \\func wideStructStr() string { return std.fmt.stringify(Wide{a: 1, b: 2, c: 3, d: 4, e: 5}) }
+    );
+    try std.testing.expectEqualStrings("<struct Wide>", try vms.asStringValue(try rt.callGlobal("wideStructStr", &.{})));
+}
+
+// sprintValueDepth's cycle guard (the `ancestors`/`anc_count` array, which
+// renders "<cycle>" instead of recursing/stack-overflowing) had zero
+// coverage. A struct can't exercise it: .struct_instance/
+// .small_struct_instance render their placeholder without ever visiting
+// their own fields, so a self-referential struct's cycle is never actually
+// walked by the printer. A map CAN: index-assignment mutates the existing
+// map object in place (proven elsewhere in this file, e.g. "m[\"a\"] =
+// 500"), so `m["self"] = m` makes the map's own value entry point at the
+// exact same object still being printed -- a genuine one-hop cycle, not
+// just a deep-equal structural loop.
+test "compiler: std.fmt.stringify on a self-referential map (m[\"self\"] = m) renders <cycle> instead of recursing forever" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func selfCycleMap() string {
+        \\    m := {}
+        \\    m["self"] = m
+        \\    return std.fmt.stringify(m)
+        \\}
+    );
+    try std.testing.expectEqualStrings("{self: <cycle>}", try vms.asStringValue(try rt.callGlobal("selfCycleMap", &.{})));
+}
+
+// sprintValueDepth's PrintMaxDepth (64) early-return truncation ("...")
+// is distinct from the cycle guard above: it fires on a genuinely
+// non-cyclic value that is just nested deeper than the printer is willing
+// to recurse (e.g. an array wrapped in an array wrapped in an array...),
+// preventing a pathological literal from blowing the native call stack.
+// Built via a loop (rather than 70 literal levels of `[...]` in source)
+// since the wrapping only needs to happen at runtime, not compile time.
+test "compiler: std.fmt.stringify on an array nested more than PrintMaxDepth (64) levels truncates with \"...\" instead of crashing" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func deepNestStr() string {
+        \\    var a any = 1
+        \\    i := 0
+        \\    for i < 70 {
+        \\        a = [a]
+        \\        i += 1
+        \\    }
+        \\    return std.fmt.stringify(a)
+        \\}
+    );
+    const result = try vms.asStringValue(try rt.callGlobal("deepNestStr", &.{}));
+    try std.testing.expect(std.mem.indexOf(u8, result, "...") != null);
+}
+
+// ── compiler_expr.zig coverage sweep (2026-08-25) ──────────────────────────
+// Targeted at genuinely rare/edge-case paths in expression compilation that
+// the huge existing suite doesn't otherwise exercise: element-count limits
+// on the untyped array/map/struct literal forms (as opposed to the typed
+// '[]T{...}' composite literal and 'defer' argument lists, which already had
+// their own coverage), the 'expr.type == <non-ident>' and 'import(...)'
+// argument-shape error paths, the two legacy-operator rejections that had no
+// test ('&&'/'||' — only '%' did), unary '!' rejection, the lexer's string
+// pool exhaustion path surfacing through an expression, struct-literal
+// duplicate-field detection and its string-keyed key form (both the
+// known-type and generic-instantiation constructors), the '>>' operator's
+// left-operand type check (only '<<' and '>>' right-operand were covered),
+// and the 'variable used where a type name was expected' struct-literal
+// disambiguation error.
+
+// arrayLit: a plain, untyped '[elem, ...]' literal with more than 255
+// elements. This is a DIFFERENT count check from tryTypedArrayLit's
+// '[]T{...}' sugar (compiler_stmts.zig, already covered) — arrayLit's own
+// limit, reached only via the plain bracket-literal fallback path in
+// arrayLitOrTypedArrayLit, had no coverage at all.
+test "compiler: a plain untyped array literal with more than 255 elements is a compile error (TooManyElements)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func f() {\n    xs := [0");
+    var i: u32 = 0;
+    while (i < 256) : (i += 1) try src.appendSlice(std.testing.allocator, ", 0");
+    try src.appendSlice(std.testing.allocator, "]\n    _ = xs\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyElements, r.err);
+}
+
+// mapLit: a '{ k: v, ... }' literal with more than 255 entries.
+test "compiler: a map literal with more than 255 entries is a compile error (TooManyElements)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func f() {\n    m := { \"k0\": 0");
+    var i: u32 = 0;
+    while (i < 256) : (i += 1) try src.appendSlice(std.testing.allocator, ", \"k\": 0");
+    try src.appendSlice(std.testing.allocator, "}\n    _ = m\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyElements, r.err);
+}
+
+// typeNameLiteral: the RHS of 'expr.type ==' (or '!=') must be a bare type
+// name (an identifier) — a non-identifier RHS like a number literal is
+// rejected here, distinct from the (already-covered) "unknown type name"
+// case where the identifier itself doesn't resolve to anything.
+test "compiler: 'expr.type == <non-identifier>' is a compile error (ExpectedTypeName)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.ExpectedTypeName, compile(&rt,
+        \\func f() bool {
+        \\    x := 5
+        \\    return x.type == 123
+        \\}
+    ));
+}
+
+// importExpr: the argument to 'import(...)' must be a string literal.
+test "compiler: 'import(...)' with a non-string-literal argument is a compile error (ExpectedStringLiteral)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.ExpectedStringLiteral, compile(&rt,
+        \\x := import(123)
+    ));
+}
+
+// importExpr: compiled with no module/import support configured at all
+// (compile()'s bare '.{}' options — module_ctx and resolve_import both
+// null), 'import(...)' of any name is rejected before ever consulting a
+// resolver.
+test "compiler: 'import(...)' compiled without any module context is a compile error (UnsupportedImportModule)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnsupportedImportModule, compile(&rt,
+        \\x := import("std")
+    ));
+}
+
+// importExpr: a module context is configured but no resolver callback is —
+// the second, independent 'orelse' branch (the first requires module_ctx
+// itself to be null, which the test above already covers).
+test "compiler: 'import(...)' with a module context but no configured resolver is a compile error (UnsupportedImportModule)" {
+    var rt = try setup();
+    defer rt.deinit();
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+
+    var dummy_ctx: u8 = 0;
+    const src = "x := import(\"std\")\n";
+    var compiler = try Compiler.init(src, chunk.g_state, heap.g_state, .{ .module_ctx = &dummy_ctx });
+    defer compiler.deinit();
+    try std.testing.expectError(error.UnsupportedImportModule, compiler.compile(true));
+}
+
+// infixExpr: '&&' was removed in favor of 'and' — only '||' and '%''s
+// sibling rejections existed before; '&&' itself had no test.
+test "compiler: 'a && b' (removed legacy operator) is a compile error suggesting 'and'" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.ExpectedExpression, compile(&rt,
+        \\func f() bool { return true && false }
+    ));
+}
+
+// infixExpr: '||' was removed in favor of 'or'.
+test "compiler: 'a || b' (removed legacy operator) is a compile error suggesting 'or'" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.ExpectedExpression, compile(&rt,
+        \\func f() bool { return true || false }
+    ));
+}
+
+// parsePrecedence's '.bang' prefix arm: unary '!' was removed in favor of
+// 'not'. (Binary '!=' lexes to a distinct token and is unaffected.)
+test "compiler: unary '!x' (removed legacy operator) is a compile error suggesting 'not'" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.ExpectedExpression, compile(&rt,
+        \\func f() bool { return !true }
+    ));
+}
+
+// parsePrecedence's err_string_pool_exhausted prefix arm: the lexer's fixed
+// 128KB string pool (shared across every string literal in the file) can be
+// exhausted by one big-enough literal; the compiler surfaces this as a
+// dedicated "string pool exhausted" message distinct from a plain
+// unterminated-string error.
+test "compiler: a string literal large enough to exhaust the lexer's 128KB string pool is a compile error (err_string_pool_exhausted)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "x := \"");
+    const chunk_of_a: []const u8 = "a" ** 1000;
+    var i: u32 = 0;
+    while (i < 200) : (i += 1) try src.appendSlice(std.testing.allocator, chunk_of_a);
+    try src.appendSlice(std.testing.allocator, "\"\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.UnterminatedString, r.err);
+    try std.testing.expect(std.mem.indexOf(u8, r.msg, "string pool exhausted") != null);
+}
+
+// validateStructLiteralFieldNames: a duplicate field name within one struct
+// literal is rejected at compile time (before the missing-required-field
+// check even runs, since it's detected per-key during the same pass).
+test "compiler: a struct literal with a duplicate field name is a compile error (DuplicateField)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateField, compile(&rt,
+        \\type Point struct { x int, y int }
+        \\p := Point{x: 1, x: 2}
+    ));
+}
+
+// structInstanceLit: a known-struct-type literal 'TypeName{...}' with more
+// than 255 field entries is rejected during parsing itself (before
+// validateStructLiteralFieldNames even runs), same limit as arrays/maps.
+test "compiler: a known-struct-type literal with more than 255 field entries is a compile error (TooManyElements)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "type Big struct { f0 int }\nfunc f() {\n    b := Big{f0: 0");
+    var i: u32 = 0;
+    while (i < 256) : (i += 1) try src.appendSlice(std.testing.allocator, ", f0: 0");
+    try src.appendSlice(std.testing.allocator, "}\n    _ = b\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyElements, r.err);
+}
+
+// structInstanceLit: field keys may be string literals instead of bare
+// identifiers ('Point{"x": 3}' as well as 'Point{x: 3}').
+test "compiler: a known-struct-type literal accepts string-literal field keys instead of bare identifiers" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Point struct { x int, y int }
+        \\func f() int {
+        \\    p := Point{"x": 3, "y": 4}
+        \\    return p.x + p.y
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 7), result.int);
+}
+
+// structInstanceLitAfterValue: the sibling literal-construction path taken
+// for a generic instantiation ('Box[int]{...}') has its own identical
+// element-count limit.
+test "compiler: a generic-struct-instantiation literal with more than 255 field entries is a compile error (TooManyElements)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "type Box[T] struct { val T }\nfunc f() {\n    b := Box[int]{val: 0");
+    var i: u32 = 0;
+    while (i < 256) : (i += 1) try src.appendSlice(std.testing.allocator, ", val: 0");
+    try src.appendSlice(std.testing.allocator, "}\n    _ = b\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyElements, r.err);
+}
+
+// structInstanceLitAfterValue: string-literal field keys work through the
+// generic-instantiation literal path too, not just structInstanceLit's.
+test "compiler: a generic-struct-instantiation literal accepts string-literal field keys too" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Box[T] struct { val T }
+        \\func f() int {
+        \\    b := Box[int]{"val": 99}
+        \\    return b.val
+        \\}
+    );
+    const result = try rt.callGlobal("f", &.{});
+    try std.testing.expectEqual(@as(i64, 99), result.int);
+}
+
+// infixExpr's '>>' handling: the left-operand int/rune check, mirroring the
+// already-covered '<<' left-operand check and '>>' right-operand check —
+// only this one specific combination (>> with a bad LHS) had no test.
+test "compiler: '>>' with a non-int/rune left operand is a compile error (TypeMismatch)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.TypeMismatch, compile(&rt,
+        \\func f() int { return true >> 1 }
+    ));
+}
+
+// varExpr: 'name{ field: val }' where 'name' resolves to an ordinary local
+// variable (not a registered type) is a clearer, more specific error than
+// the generic "not a known type" case (already covered) — this is the
+// classic Go-style ambiguity between a struct literal and a block opener,
+// disambiguated here by looksLikeNonEmptyStructLiteral's lookahead.
+test "compiler: 'localVar{ field: val }' where localVar is a plain variable, not a type, is a compile error naming it as such" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\func f() {
+        \\    x := 5
+        \\    y := x{a: 1}
+        \\    _ = y
+        \\}
+    );
+    try std.testing.expectEqual(error.UnexpectedToken, r.err);
+    try std.testing.expect(std.mem.indexOf(u8, r.msg, "is a variable, not a type") != null);
 }

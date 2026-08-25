@@ -1266,3 +1266,236 @@ test "normalizePathInPlace accumulates consecutive unresolvable .. segments" {
         try testing.expectEqualStrings("b", out);
     }
 }
+
+test "pathIsUnderRoot: '.' root allows any non-escaping relative path but rejects absolute paths and '..' escapes" {
+    try testing.expect(pathIsUnderRoot("foo/bar.gengo", "."));
+    try testing.expect(pathIsUnderRoot(".", "."));
+    try testing.expect(!pathIsUnderRoot("/etc/passwd", "."));
+    try testing.expect(!pathIsUnderRoot("..", "."));
+    try testing.expect(!pathIsUnderRoot("../secret.gengo", "."));
+}
+
+test "pathIsUnderRoot: prefix match requires a path-separator boundary; an empty root is unrestricted; a leading './' on root is stripped" {
+    try testing.expect(pathIsUnderRoot("anything/at/all", ""));
+    try testing.expect(pathIsUnderRoot("src/foo.gengo", "src"));
+    try testing.expect(pathIsUnderRoot("src", "src"));
+    // "src_extra" must not match root "src" just because it shares the prefix
+    // string -- only a '/'-bounded (or exact) match counts.
+    try testing.expect(!pathIsUnderRoot("src_extra/foo.gengo", "src"));
+    try testing.expect(pathIsUnderRoot("modbus/x.gengo", "./modbus"));
+    try testing.expect(!pathIsUnderRoot("other/x.gengo", "./modbus"));
+}
+
+test "resolveImportPath: relative import falls back to '<name>.gengo' then '<name>/mod.gengo' when the bare path is absent" {
+    var h: heap.State = .{};
+    try h.init(64 * 1024, 256, testing.allocator);
+    defer h.deinit();
+
+    const entries = [_]SourceEntry{
+        .{ .path = "sub.gengo", .source = "" },
+        .{ .path = "pkgdir/mod.gengo", .source = "" },
+    };
+    var session = testSession(&h, "", &entries);
+
+    const via_ext = try session.resolveImportPath("main.gengo", "./sub");
+    try testing.expectEqualStrings("sub.gengo", via_ext);
+
+    const via_mod = try session.resolveImportPath("main.gengo", "./pkgdir");
+    try testing.expectEqualStrings("pkgdir/mod.gengo", via_mod);
+}
+
+test "resolveImportPath: relative import not found reports all three attempted candidate paths in the error message" {
+    var h: heap.State = .{};
+    try h.init(64 * 1024, 256, testing.allocator);
+    defer h.deinit();
+
+    var session = testSession(&h, "", &.{});
+
+    try testing.expectError(error.ImportNotFound, session.resolveImportPath("main.gengo", "./missing"));
+    const msg = session.last_error_msg_buf[0..session.last_error_msg_len];
+    try testing.expect(std.mem.indexOf(u8, msg, "missing") != null);
+    try testing.expect(std.mem.indexOf(u8, msg, "missing.gengo") != null);
+    try testing.expect(std.mem.indexOf(u8, msg, "missing/mod.gengo") != null);
+}
+
+test "resolveImportPath: package-style (non-relative) import resolves via '.gengo' and '/mod.gengo' suffixes" {
+    var h: heap.State = .{};
+    try h.init(64 * 1024, 256, testing.allocator);
+    defer h.deinit();
+
+    const entries = [_]SourceEntry{
+        .{ .path = "mathlib.gengo", .source = "" },
+        .{ .path = "greetlib/mod.gengo", .source = "" },
+    };
+    var session = testSession(&h, "", &entries);
+
+    const via_ext = try session.resolveImportPath("main.gengo", "mathlib");
+    try testing.expectEqualStrings("mathlib.gengo", via_ext);
+
+    const via_mod = try session.resolveImportPath("main.gengo", "greetlib");
+    try testing.expectEqualStrings("greetlib/mod.gengo", via_mod);
+}
+
+// isAllowedImportPath's module_roots loop (checked when the resolved path
+// doesn't fall under source_root) had no direct coverage: every prior
+// sandbox test only ever configured source_root, never module_roots_buf.
+test "isAllowedImportPath: a configured module_root permits an import path outside source_root" {
+    var h: heap.State = .{};
+    try h.init(64 * 1024, 256, testing.allocator);
+    defer h.deinit();
+
+    const entries = [_]SourceEntry{
+        .{ .path = "vendor/lib.gengo", .source = "" },
+        .{ .path = "elsewhere/lib.gengo", .source = "" },
+    };
+    var session: Session = .{};
+    session.hs = &h;
+    session.provider = .{ .table = &entries };
+    session.source_root = "app";
+    session.module_roots_buf[0] = "vendor";
+    session.module_roots_count = 1;
+
+    const resolved = try session.resolveImportPath("app/main.gengo", "vendor/lib");
+    try testing.expectEqualStrings("vendor/lib.gengo", resolved);
+
+    try testing.expectError(error.ImportOutsideRoot, session.resolveImportPath("app/main.gengo", "elsewhere/lib"));
+}
+
+// hasModuleExport's capability-module branch has two match rules: an exact
+// function-name match, and a "scoped grant" match where a longer, dotted
+// function name (e.g. a future "listen.tcp") is treated as exporting its
+// bare prefix. None of the real, built-in CapModuleDesc tables use a dotted
+// function name today, so that second rule was reachable only via a
+// synthetic capability_modules list.
+test "hasModuleExport: capability module lookup matches exact function names and dotted scope prefixes" {
+    var h: heap.State = .{};
+    try h.init(64 * 1024, 256, testing.allocator);
+    defer h.deinit();
+
+    const funcs = [_]CapModuleFuncDesc{
+        .{ .name = "dial", .arity = 1, .native_id = 1 },
+        .{ .name = "listen.tcp", .arity = 1, .native_id = 2 },
+    };
+    const caps = [_]CapModuleDesc{.{ .name = "netlike", .functions = &funcs }};
+
+    var session: Session = .{};
+    session.hs = &h;
+    session.capability_modules = &caps;
+
+    try testing.expect(hasModuleExport(&session, "cap:netlike", "dial"));
+    try testing.expect(hasModuleExport(&session, "cap:netlike", "listen"));
+    try testing.expect(!hasModuleExport(&session, "cap:netlike", "bogus"));
+    try testing.expect(!hasModuleExport(&session, "cap:unknown", "dial"));
+}
+
+test "hasModuleExport: host module lookup matches by exact function name only" {
+    var h: heap.State = .{};
+    try h.init(64 * 1024, 256, testing.allocator);
+    defer h.deinit();
+
+    const funcs = [_]HostModuleFuncDesc{.{ .name = "ping", .arity = 0, .call_id = 1 }};
+    const hosts = [_]HostModuleDesc{.{ .name = "alpha", .functions = &funcs }};
+
+    var session: Session = .{};
+    session.hs = &h;
+    session.host_module_descs = &hosts;
+
+    try testing.expect(hasModuleExport(&session, "host:alpha", "ping"));
+    try testing.expect(!hasModuleExport(&session, "host:alpha", "pong"));
+    try testing.expect(!hasModuleExport(&session, "host:beta", "ping"));
+}
+
+// resolveModuleTypeKind/resolveModuleConstant both walk a compiled
+// ModuleRecord's export_names/export_type_kinds/export_const_values arrays
+// directly -- exercised here without needing a real multi-file compile.
+test "resolveModuleTypeKind and resolveModuleConstant look up exported symbols recorded on a compiled ModuleRecord" {
+    var h: heap.State = .{};
+    try h.init(64 * 1024, 256, testing.allocator);
+    defer h.deinit();
+
+    var session: Session = .{};
+    session.hs = &h;
+    try session.initArena();
+    defer session.deinitArena();
+
+    const path = "dep.gengo";
+    session.modules[0].path_len = path.len;
+    @memcpy(session.modules[0].path_buf[0..path.len], path);
+    session.modules[0].export_count = 2;
+    session.modules[0].export_names[0] = "SIZE";
+    session.modules[0].export_type_kinds[0] = .func_or_var;
+    session.modules[0].export_const_values[0] = .{ .number = 42 };
+    session.modules[0].export_names[1] = "Widget";
+    session.modules[0].export_type_kinds[1] = .struct_t;
+    session.modules[0].export_const_values[1] = null;
+    session.module_count = 1;
+
+    const const_info = resolveModuleConstant(&session, path, "SIZE");
+    try testing.expect(const_info != null);
+    try testing.expectEqual(@as(f64, 42), const_info.?.number);
+    try testing.expect(resolveModuleConstant(&session, path, "Missing") == null);
+    try testing.expect(resolveModuleConstant(&session, "unknown.gengo", "SIZE") == null);
+
+    const type_info = resolveModuleTypeKind(&session, path, "Widget");
+    try testing.expect(type_info != null);
+    try testing.expectEqual(ExportTypeKind.struct_t, type_info.?.kind);
+    try testing.expectEqualStrings("@mod:dep.gengo.Widget", type_info.?.qualified_name);
+    try testing.expect(resolveModuleTypeKind(&session, path, "Missing") == null);
+    try testing.expect(resolveModuleTypeKind(&session, "unknown.gengo", "Widget") == null);
+}
+
+// isCapabilityEnabled's inner loop only returns true when the matched grant's
+// bare name also has a corresponding entry in capability_modules; a grant
+// whose name matches but whose module was never registered (e.g. compiled
+// out, or simply not wired up for this embedding) must fall through to
+// false rather than the outer loop's own "not found at all" false.
+test "isCapabilityEnabled: a name present in enabled_capabilities but absent from capability_modules is not enabled" {
+    var session: Session = .{};
+    session.enabled_capabilities = &.{"net"};
+    session.capability_modules = &.{};
+    try testing.expect(!session.isCapabilityEnabled("net"));
+}
+
+// resolveImportOpaque's "host:" branch delegates to isHostModule, whose own
+// false-fallthrough (the name isn't in host_module_names) had no coverage --
+// every other host-module test used a name that was actually registered.
+test "resolveImportOpaque: an unregistered 'host:' import name fails with ImportNotFound" {
+    var session: Session = .{};
+    session.host_module_names = &.{"alpha"};
+    try testing.expectError(error.ImportNotFound, Session.resolveImportOpaque(&session, "main.gengo", "host:beta"));
+}
+
+// resolveImportPath's dot-prefixed ("./..."/"../...") branch has its own
+// sandbox check (distinct from the package-style branch's, already covered
+// above) -- a relative import whose normalized form escapes source_root must
+// be rejected before any sourceExists probe.
+test "resolveImportPath: a dot-prefixed relative import that escapes source_root is rejected" {
+    var h: heap.State = .{};
+    try h.init(64 * 1024, 256, testing.allocator);
+    defer h.deinit();
+
+    var session = testSession(&h, "sub", &.{});
+    try testing.expectError(error.ImportOutsideRoot, session.resolveImportPath("sub/main.gengo", "../../etc/passwd"));
+}
+
+test "checkGlobalExistsInSession: recognizes registered globals plus std/cap/host/module-prefixed and test-block names" {
+    var h: heap.State = .{};
+    try h.init(64 * 1024, 256, testing.allocator);
+    defer h.deinit();
+
+    var session: Session = .{};
+    session.hs = &h;
+    var known: [4][]const u8 = .{ "main.counter", "", "", "" };
+    session.known_globals = @ptrCast(&known);
+    session.known_global_count = 1;
+
+    try testing.expect(checkGlobalExistsInSession(&session, "main.counter"));
+    try testing.expect(!checkGlobalExistsInSession(&session, "main.other"));
+    try testing.expect(checkGlobalExistsInSession(&session, StdModuleGlobalName));
+    try testing.expect(checkGlobalExistsInSession(&session, "module:std.time"));
+    try testing.expect(checkGlobalExistsInSession(&session, "cap:net"));
+    try testing.expect(checkGlobalExistsInSession(&session, "host:alpha"));
+    try testing.expect(checkGlobalExistsInSession(&session, "@module_type:dep"));
+    try testing.expect(checkGlobalExistsInSession(&session, "@mod:dep"));
+    try testing.expect(checkGlobalExistsInSession(&session, "__test_0"));
+}
