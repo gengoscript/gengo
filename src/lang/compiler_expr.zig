@@ -962,6 +962,10 @@ pub fn parsePrecedence(c: anytype, p: Prec) anyerror!void {
             c.setErr("string pool exhausted (max {d}KB)", .{@import("lexer.zig").StrPoolSize / 1024});
             return error.UnterminatedString;
         },
+        .err_bad_escape => {
+            c.setErr("bad escape sequence (expected \\xHH with two hex digits)", .{});
+            return error.BadEscape;
+        },
         else => {
             c.setErr("expected expression, found {s}", .{c.tokenName(c.cur.typ)});
             return error.ExpectedExpression;

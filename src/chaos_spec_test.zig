@@ -941,3 +941,193 @@ test "template render with named-string type survives compactManagedHeap" {
 
     try std.testing.expectEqualStrings("<b>r999</b>\nok\n", output);
 }
+
+// ── printValueDepth coverage via the REPL top-level echo path ──────────────
+// io.zig's printValue/printValueDepth is NOT what std.io.print/println use —
+// lang/native/io.zig has its own separate sprintValue/sprintValueDepth for
+// that. io.zig's printValue has exactly one caller: runtime.zig's
+// runIncremental(), which echoes a dangling top-level expression's value the
+// same way a real REPL session does. So exercising it means driving the
+// Runtime through runIncremental() one line at a time (mirroring a REPL
+// session) and capturing what gets echoed, rather than going through
+// std.io.println.
+fn runIncrLine(rt: *api.Runtime, src: []const u8) !void {
+    const r = rt.runIncremental(src);
+    if (r != .ok) {
+        if (r == .compile_error) {
+            std.debug.print("incremental compile error on `{s}`: {s}\n", .{ src, r.compile_error.msg });
+        } else if (r == .runtime_error) {
+            std.debug.print("incremental runtime error on `{s}`: {s}\n", .{ src, r.runtime_error.msg });
+        }
+        return error.TestUnexpectedResult;
+    }
+}
+
+fn expectReplEcho(lines: []const []const u8, expected: []const u8) !void {
+    var rt = try setup();
+    defer rt.deinit();
+
+    g_stdout = std.array_list.Managed(u8).init(std.testing.allocator);
+    g_stderr = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer g_stdout.deinit();
+    defer g_stderr.deinit();
+
+    io.setWriteOverrides(captureStdout, captureStderr);
+    defer io.clearWriteOverrides();
+
+    for (lines) |line| try runIncrLine(&rt, line);
+
+    try std.testing.expectEqualStrings(expected, g_stdout.items);
+}
+
+test "REPL echo (printValueDepth): array literal renders as array_managed" {
+    try expectReplEcho(&.{
+        "arr := [1, 2, 3]",
+        "arr",
+    }, "[1, 2, 3]\n");
+}
+
+test "REPL echo (printValueDepth): array slice renders as array_view" {
+    try expectReplEcho(&.{
+        "arr := [10, 20, 30, 40]",
+        "view := arr[1:3]",
+        "view",
+    }, "[20, 30]\n");
+}
+
+test "REPL echo (printValueDepth): std.core.append result renders as array_capacity" {
+    try expectReplEcho(&.{
+        "std := import(\"std\")",
+        "arr := std.core.append([1, 2, 3], 4)",
+        "arr",
+    }, "[1, 2, 3, 4]\n");
+}
+
+test "REPL echo (printValueDepth): map literal renders as .map" {
+    try expectReplEcho(&.{
+        "m := {\"a\": 1, \"b\": 2}",
+        "m",
+    }, "{a: 1, b: 2}\n");
+}
+
+test "REPL echo (printValueDepth): map with an inserted key renders as .map_managed" {
+    try expectReplEcho(&.{
+        "m := {\"a\": 1, \"b\": 2}",
+        "m[\"c\"] = 3",
+        "m",
+    }, "{a: 1, b: 2, c: 3}\n");
+}
+
+test "REPL echo (printValueDepth): map past the 8-entry threshold renders as .map_hashed" {
+    try expectReplEcho(&.{
+        "m := {}",
+        "for i := 0; i < 9; i += 1 { m[i] = i }",
+        "m",
+    }, "{0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8}\n");
+}
+
+test "REPL echo (printValueDepth): small struct instance (<=4 fields)" {
+    try expectReplEcho(&.{
+        "type Point struct { x int, y int }",
+        "p := Point{x: 1, y: 2}",
+        "p",
+    }, "Point{x: 1, y: 2}\n");
+}
+
+test "REPL echo (printValueDepth): large struct instance (>4 fields)" {
+    try expectReplEcho(&.{
+        "type Big struct { a int, b int, c int, d int, e int }",
+        "g := Big{a: 1, b: 2, c: 3, d: 4, e: 5}",
+        "g",
+    }, "Big{a: 1, b: 2, c: 3, d: 4, e: 5}\n");
+}
+
+test "REPL echo (printValueDepth): inline_variant for a small int payload and for no payload" {
+    try expectReplEcho(&.{
+        "type Shape variant { tag(n int), circle { radius float }, point }",
+        "Shape.tag(42)",
+        "Shape.point",
+    }, "Shape.tag(42)\nShape.point\n");
+}
+
+test "REPL echo (printValueDepth): variant_value heap payload for an int outside the inline range" {
+    try expectReplEcho(&.{
+        "type Shape variant { tag(n int), point }",
+        "Shape.tag(999999999999)",
+    }, "Shape.tag(999999999999)\n");
+}
+
+test "REPL echo (printValueDepth): variant_value with arm_fields (record-literal arm)" {
+    try expectReplEcho(&.{
+        "type Shape variant { circle { radius float }, point }",
+        "Shape.circle{radius: 5.5}",
+    }, "Shape.circle(5.5)\n");
+}
+
+test "REPL echo (printValueDepth): enum_value" {
+    try expectReplEcho(&.{
+        "type Color enum { red, green, blue }",
+        "Color.red",
+    }, "red\n");
+}
+
+test "REPL echo (printValueDepth): named_error_value" {
+    try expectReplEcho(&.{
+        "type MyErr error",
+        "MyErr(\"boom\")",
+    }, "MyErr(boom)\n");
+}
+
+test "REPL echo (printValueDepth): bigint" {
+    try expectReplEcho(&.{
+        "b := bigint(\"123456789012345678901234567890\")",
+        "b",
+    }, "123456789012345678901234567890\n");
+}
+
+// Every function value observed from script code — even a bare reference to
+// a top-level `func f() {}` with no captures — turns out to render as
+// "<closure>", never "<func>": referencing a function by name always goes
+// through make_closure, so the bare `.function` prototype Object (the
+// `<func>` arm in printValueDepth) is never the outer Value a script can
+// hold; it only ever lives inside a ClosureObj's `.func` field. Verified
+// two ways: a plain top-level function reference under runIncremental
+// (this test) and the same function passed to std.io.println in one shot
+// (which goes through native/io.zig's separate sprintValueDepth and prints
+// "<closure>" too) — so this isn't specific to the REPL echo path. Left as
+// a documented finding rather than a bug: `.function`/"<func>" is dead code
+// from any legitimate script surface, not a wrong rendering of a reachable
+// value.
+test "REPL echo (printValueDepth): function value (even with no captures) renders as <closure>" {
+    try expectReplEcho(&.{
+        "func f() int { return 1 }",
+        "f",
+        "n := 5",
+        "c := func() int { return n }",
+        "c",
+    }, "<closure>\n<closure>\n");
+}
+
+test "REPL echo (printValueDepth): native function value renders as <native-func>" {
+    try expectReplEcho(&.{
+        "std := import(\"std\")",
+        "nf := std.core.len",
+        "nf",
+    }, "<native-func>\n");
+}
+
+test "REPL echo (printValueDepth): cycle detection on a self-referential map" {
+    try expectReplEcho(&.{
+        "m := {}",
+        "m[\"self\"] = m",
+        "m",
+    }, "{self: <cycle>}\n");
+}
+
+test "REPL echo (printValueDepth): nested array of struct instances" {
+    try expectReplEcho(&.{
+        "type Point struct { x int, y int }",
+        "arr := [Point{x: 1, y: 2}, Point{x: 3, y: 4}]",
+        "arr",
+    }, "[Point{x: 1, y: 2}, Point{x: 3, y: 4}]\n");
+}

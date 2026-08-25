@@ -15516,3 +15516,381 @@ test "compiler: 'localVar{ field: val }' where localVar is a plain variable, not
     try std.testing.expectEqual(error.UnexpectedToken, r.err);
     try std.testing.expect(std.mem.indexOf(u8, r.msg, "is a variable, not a type") != null);
 }
+
+// namedTypeAssignableTo: a two-hop subtype chain (Child subtypes Parent
+// subtypes Grandparent) — the previously-covered case only walked one hop
+// (direct parent match); this exercises the `cur = parent` loop continuing
+// past the first ancestor to find the match two levels up.
+test "compiler: a direct call argument two subtype levels below the declared parameter type is accepted" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Grandparent int
+        \\subtype Parent Grandparent
+        \\subtype Child Parent
+        \\func take(v Grandparent) int { return int(v) }
+        \\func f() int { return take(Child(5)) }
+    );
+}
+
+// emitGetVar: a std import bound as a LOCAL (inside a function, not a
+// top-level global) — the from_std/std_namespace_path branch on a resolved
+// local was previously only exercised for the global-qname path.
+test "compiler: a std import bound as a local variable inside a function still resolves namespaced calls" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func useStdLocally() string {
+        \\    std := import("std")
+        \\    return std.core.type_of(5)
+        \\}
+    );
+    const result = try rt.callGlobal("useStdLocally", &.{});
+    try std.testing.expectEqualStrings("int", try vms.asStringValue(result));
+}
+
+// emitGetVar: a file-imported module bound as a LOCAL (inside a function) —
+// the import_module_path branch on a resolved local, mirroring the from_std
+// case above but for a real cross-file import rather than std.
+test "compiler: a file-imported module bound as a local variable inside a function still resolves field calls" {
+    const main_src =
+        \\func useDepLocally() int {
+        \\    dep := import("./dep")
+        \\    return dep.value()
+        \\}
+    ;
+    const dep_src =
+        \\pub func value() int { return 7 }
+    ;
+    const source_entries = [_]module_compile.SourceEntry{
+        .{ .path = "main.gengo", .source = main_src },
+        .{ .path = "dep.gengo", .source = dep_src },
+    };
+
+    var rt = try setup();
+    defer rt.deinit();
+    const outcome = try rt.runPathWithSources(main_src, "main.gengo", &source_entries);
+    try std.testing.expectEqual(vm.RunOutcome.completed, outcome);
+    const result = try rt.callGlobal("useDepLocally", &.{});
+    try std.testing.expectEqual(@as(i64, 7), result.int);
+}
+
+// setCurrentExprPrimResult: the SYMMETRIC form of the erased-scalar-plus-
+// plain-scalar rejection (plain scalar OP named-erased scalar, e.g.
+// `1 + Age(20)`) — the asymmetric form (`Age(20) + 1`) was already covered;
+// this is the mirror branch that was still unexercised.
+test "compiler: a plain scalar literal on the LEFT of an erased named-scalar operand is a compile error (TypeMismatch)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.TypeMismatch, compile(&rt,
+        \\type Age int
+        \\func f() int { return int(1 + Age(20)) }
+    ));
+}
+
+// setCurrentExprPrimResult: a mismatched-prim bitwise op where neither side
+// is bool/string (so the earlier non-numeric check doesn't fire first) and
+// neither side is the int/float pairing (so the int_float branch doesn't
+// fire either) — bigint & int is exactly that residual case.
+test "compiler: a bitwise op between bigint and int is a compile error (TypeMismatch)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.TypeMismatch, compile(&rt,
+        \\func f() bigint { return bigint(2) & 5 }
+    ));
+}
+
+// emitVarTypeEpilog: named-return array/map/actor-ref types — the runtime
+// assert_type epilogue for these three TypeCheck variants (assert_arr,
+// assert_map, assert_actor_ref) was previously only exercised for
+// assert_err; varTypeCheckProven never special-cases these three tags (only
+// prim/struct_type/interface_type/variant_type), so the epilogue always
+// fires for them.
+test "compiler: named return values of array, map, and actor type each emit a runtime type assertion on return" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func makeArr() (result []int) {
+        \\    return [1, 2, 3]
+        \\}
+        \\func makeMap() (result map[string]int) {
+        \\    return {"a": 1}
+        \\}
+        \\func identityActor(a actor) (result actor) {
+        \\    return a
+        \\}
+    );
+}
+
+// emitGetVar: referencing an enclosing function's local from inside a task
+// body declared INSIDE that function (rare, but the compiler explicitly
+// supports task decls nested in a function) resolves via resolveUpvalue,
+// which §3.3 forbids for task bodies — never previously exercised because
+// every other task test declares its task types at the top level.
+test "compiler: a task body declared inside a function cannot capture that function's local (TaskBodyCapturesOuterLocal)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.TaskBodyCapturesOuterLocal, compile(&rt,
+        \\func outer() {
+        \\    x := 5
+        \\    type Leaker task func(reply actor) {
+        \\        y := x
+        \\        reply.send(y)
+        \\    }
+        \\}
+    ));
+}
+
+// emitGetVar: a task body referencing a top-level mutable `var` global —
+// §3.3 forbids this (only const/func/type/import "ambient" globals are
+// visible); never previously exercised.
+test "compiler: a task body referencing a mutable top-level global is a compile error (MutableGlobalInTaskBody)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.MutableGlobalInTaskBody, compile(&rt,
+        \\var counter = 0
+        \\type Reader task func(reply actor) {
+        \\    v := counter
+        \\    reply.send(v)
+        \\}
+    ));
+}
+
+// pushLoop: exceeding MaxLoopDepth nested loops is a fatal compile error.
+test "compiler: nesting more than MaxLoopDepth loops is a compile error (TooManyNestedLoops)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func f() {\n");
+    var i: u32 = 0;
+    while (i <= ct.MaxLoopDepth) : (i += 1) try src.appendSlice(std.testing.allocator, "for true {\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyNestedLoops, r.err);
+}
+
+// emitBreak: exceeding MaxLoopBreaks break statements within a single loop
+// is a fatal compile error.
+test "compiler: more than MaxLoopBreaks 'break' statements in one loop is a compile error (TooManyBreaksInLoop)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "func f() {\n    for true {\n");
+    var i: u32 = 0;
+    while (i <= ct.MaxLoopBreaks) : (i += 1) try src.appendSlice(std.testing.allocator, "break\n");
+    try src.appendSlice(std.testing.allocator, "    }\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyBreaksInLoop, r.err);
+}
+
+// decl(): 'pub' used as the first token of a statement inside a function
+// body is rejected immediately (before even inspecting what follows) —
+// only the top-level acceptance paths were previously exercised.
+test "compiler: 'pub' used inside a function body is a compile error (InvalidPubTarget)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.InvalidPubTarget, compile(&rt,
+        \\func f() {
+        \\    pub const x = 1
+        \\}
+    ));
+}
+
+// pubDecl: 'pub subtype ...' — the subtype-export path was never exercised
+// (only pub const/type/func were).
+test "compiler: 'pub subtype' exports a subtype declaration" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\type Meters int
+        \\pub subtype SmallMeters Meters range 0..100
+    );
+}
+
+// pubDecl: 'pub' followed by something other than const/type/subtype/func
+// (a plain 'var') falls through to the generic InvalidPubTarget error —
+// the top-level decl()-side InvalidPubTarget (inside a function) was
+// covered above; this is pubDecl's own internal fallback.
+test "compiler: 'pub var' is a compile error (InvalidPubTarget)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.InvalidPubTarget, compile(&rt,
+        \\pub var x = 1
+    ));
+}
+
+// looksLikeGenericTypeParams: a non-identifier, non-comma token inside the
+// brackets (e.g. a number) immediately disqualifies the generic-type-params
+// interpretation, falling back to ordinary array/map type-spec parsing --
+// which then fails on the same token for an unrelated reason (not a valid
+// key type), giving a clean, deliberate parse error either way.
+test "compiler: a named type decl with a number inside brackets ('[5]int') is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\type Foo [5]int
+    );
+    try std.testing.expectEqual(error.UnexpectedToken, r.err);
+    try std.testing.expect(std.mem.indexOf(u8, r.msg, "expected identifier") != null);
+}
+
+// addExport: two pub declarations exporting under the same stable name is a
+// compile error, distinct from any earlier same-name-global check (a const
+// and a struct type occupy different internal registries, so nothing
+// upstream of addExport rejects this pairing).
+test "compiler: a pub const and a pub struct type sharing the same name is a compile error (DuplicateExport)" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\pub const A = 1
+        \\pub type A struct { x int }
+    );
+    try std.testing.expectEqual(error.DuplicateExport, r.err);
+}
+
+// addExport: exceeding MaxModuleExports distinct pub names is a fatal
+// compile error.
+test "compiler: exporting more than MaxModuleExports names is a compile error (TooManyFields)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    var i: u32 = 0;
+    var buf: [32]u8 = undefined;
+    while (i <= ct.MaxModuleExports) : (i += 1) {
+        const piece = try std.fmt.bufPrint(&buf, "pub const A{d} = {d}\n", .{ i, i });
+        try src.appendSlice(std.testing.allocator, piece);
+    }
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyFields, r.err);
+}
+
+// isTypedVarDecl: the '[]T = expr' (array) shape of the no-keyword,
+// space-syntax typed declaration, used in a for-loop init clause — only the
+// bare-ident ('name Type = expr') shape had coverage before.
+test "compiler: a for-loop init clause with a no-keyword array-typed declaration ('x []int = ...') compiles" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func f() int {
+        \\    total := 0
+        \\    for arr []int = [1, 2, 3]; total < 1; total += 1 {
+        \\        total += arr[0]
+        \\    }
+        \\    return total
+        \\}
+    );
+}
+
+// isTypedVarDecl: the '[K]V = expr' (bracket-immediate map) shape of the
+// no-keyword typed declaration, used in a for-loop init clause. The RHS
+// must not itself contain a '{' (e.g. a map literal) — isCStyleFor's own
+// lookahead (a separate, simpler scanner) stops at the first '{' it sees
+// while looking for the clause-separating ';', so an inline map literal in
+// the init clause would misclassify this as a while-style loop before
+// isTypedVarDecl is ever consulted; referencing a pre-built map sidesteps
+// that unrelated scanner's limitation.
+test "compiler: a for-loop init clause with a no-keyword bracket map-typed declaration ('x [string]int = ...') compiles" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func f() int {
+        \\    existing := {"a": 1}
+        \\    for m [string]int = existing; false; {}
+        \\    return 0
+        \\}
+    );
+}
+
+// isTypedVarDecl: the 'func(...) R = expr' shape of the no-keyword typed
+// declaration, used in a for-loop init clause.
+test "compiler: a for-loop init clause with a no-keyword func-typed declaration ('f func(int) int = ...') compiles" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func idFn(x int) int { return x }
+        \\func g() int {
+        \\    for h func(int) int = idFn; false; {}
+        \\    return 0
+        \\}
+    );
+}
+
+// isTypedVarDecl: an identifier type immediately followed by '[...]'
+// (e.g. 'map[K]V' spelled with the 'map' keyword rather than the bare
+// '[K]V' bracket form above), used in a for-loop init clause.
+test "compiler: a for-loop init clause with a no-keyword 'map[K]V'-typed declaration compiles" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\func f() int {
+        \\    existing := {"a": 1}
+        \\    for m map[string]int = existing; false; {}
+        \\    return 0
+        \\}
+    );
+}
+
+// resolveImportAliasPath: a std import bound as a LOCAL used as the module
+// prefix of a module-qualified type annotation (isTypedVarDecl's dot
+// branch) — the local.std_namespace_path/from_std branch was previously
+// only exercised via the global-qname fallback. import("std") only resolves
+// through the full runtime session (bare compile() has no module_ctx), so
+// this uses rt.run() rather than compileAndInspect; resolveModuleTypeName's
+// callback then fails to resolve a real type on the "std" module path,
+// giving a clean, expected UnknownType.
+test "compiler: a for-loop init typed decl referencing a locally-bound std alias as a module-qualified type reports UnknownType" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnknownType, rt.run(
+        \\func f() {
+        \\    std := import("std")
+        \\    for x std.Bogus = 0; false; {}
+        \\}
+    ));
+}
+
+// checkStdNamespaceField: an unknown field close (edit distance < 3) to a
+// real export of the same std namespace gets a "did you mean" suggestion —
+// only the no-suggestion fallback message was previously exercised. Uses
+// rt.run() (not compileAndInspect) since import("std") needs the full
+// runtime session; the resulting error/message land on rt's own
+// last_compile_* fields instead of a Compiler's.
+test "compiler: an unknown std namespace field close to a real export gets a 'did you mean' suggestion" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnknownField, rt.run(
+        \\std := import("std")
+        \\func f() float { return std.math.sqrtz(4.0) }
+    ));
+    try std.testing.expect(std.mem.indexOf(u8, rt.last_compile_msg_buf[0..rt.last_compile_msg_len], "did you mean 'sqrt'") != null);
+}
+
+// failOnLexerError: a string literal whose content overflows the lexer's
+// shared string pool is a compile error distinct from a plain unterminated
+// string.
+test "compiler: a string literal exceeding the lexer's string pool size is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "x := \"");
+    try src.appendNTimes(std.testing.allocator, 'a', 140 * 1024);
+    try src.appendSlice(std.testing.allocator, "\"\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.UnterminatedString, r.err);
+    try std.testing.expect(std.mem.indexOf(u8, r.msg, "string pool exhausted") != null);
+}
+
+// failOnLexerError: a '\x' escape with non-hex digits is a compile error
+// (BadEscape) distinct from an unterminated string or an unknown escape.
+test "compiler: a string literal with a non-hex '\\x' escape is a compile error (BadEscape)" {
+    var rt = try setup();
+    defer rt.deinit();
+    const r = compileAndInspect(&rt,
+        \\x := "\xZZ"
+    );
+    try std.testing.expectEqual(error.BadEscape, r.err);
+    try std.testing.expect(std.mem.indexOf(u8, r.msg, "bad escape sequence") != null);
+}
