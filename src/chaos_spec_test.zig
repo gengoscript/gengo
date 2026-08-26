@@ -370,6 +370,27 @@ test "std.io.read(n) returns null without consuming stdin when n is zero or nega
     );
 }
 
+// io_read's max_bytes computation has a separate .float arm (a script can
+// call std.io.read with a float literal/expression, not just an int) that
+// mirrors the .int arm's zero-or-negative-returns-null short circuit and its
+// positive-value @intFromFloat conversion -- neither sub-case had any
+// coverage anywhere else, since every other std.io.read test in this file
+// passes an int.
+test "std.io.read(n) accepts a float n, with the same zero/negative-returns-null rule" {
+    try expectStdinOutput(
+        \\std := import("std")
+        \\a := std.io.read(0.0)
+        \\std.io.println(a == null)
+        \\b := std.io.read(-2.5)
+        \\std.io.println(b == null)
+        \\c := std.io.read(3.0)
+        \\std.io.println(c)
+    ,
+        "hello",
+        "true\ntrue\nhel\n",
+    );
+}
+
 test "std.io.read(n) returns at most n bytes, leaving the rest for the next read" {
     // stdin has 11 bytes; the first read(5) must not spill into the second.
     try expectStdinOutput(

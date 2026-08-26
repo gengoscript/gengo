@@ -8778,6 +8778,98 @@ test "cap:net dial/listen/accept/read/write/close and address/deadline ops throu
     try std.testing.expectEqual(@as(u32, 1), state.listener_close_calls);
 }
 
+// matchesInterfaceType (vm_types.zig): the .native_function branch of its
+// per-method switch, which only cap:net.Conn/Listener values can reach —
+// their methods are registered as native_function objects under
+// "@cap_type:net.Conn.<method>" keys (see main.zig's cap-module install
+// code), never as Gengo function/closure objects. A Gengo-declared
+// interface has no compile-time knowledge of that struct_type (it's built
+// entirely at runtime by the capability installer, not through the normal
+// struct-declaration registry), so structConformsToInterface can never
+// prove conformance here and the call always falls back to the runtime
+// check — unlike every other interface test in this file, which exercises
+// user-defined struct methods (plain .function/.closure globals). The
+// check is arity-only for natives (nf.arity includes the receiver, the
+// interface method's arity does not): close()'s registered native arity is
+// 1, matching a zero-arg interface method's arity + 1.
+test "compiler: a cap:net Conn struct instance satisfies a Gengo interface via matchesInterfaceType's native-function arity check" {
+    net_state.clearPolicyRules();
+    _ = net_state.addPolicyRule(.allow, "*", 0);
+    defer net_state.clearPolicyRules();
+
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{"net"},
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    switch (rt.run(
+        \\net := import("cap:net")
+        \\type Closer interface { close() bool }
+        \\func takeCloser(c Closer) bool { return true }
+        \\func doDialAndCheckInterface() bool {
+        \\    conn := net.dial("tcp", "example.com:443")
+        \\    ok := takeCloser(conn)
+        \\    conn.close()
+        \\    return ok
+        \\}
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+
+    var state = FakeCapNetState{};
+    net_state.setNetHandlers(fake_cap_net_handlers, @ptrCast(&state));
+    defer net_state.resetHandlers();
+
+    switch (rt.call("doDialAndCheckInterface", &.{})) {
+        .ok => |v| try std.testing.expect(v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    try std.testing.expectEqual(@as(u32, 1), state.close_calls);
+}
+
+// The mirror of the test above: an interface requiring an arity the native
+// method doesn't have (close(x int), arity 2) must fail conformance — the
+// `if (nf.arity != m.arity + 1) return false;` branch actually returning
+// false, surfacing as a TypeError at the call site rather than silently
+// accepting.
+test "compiler: a cap:net Conn struct instance fails a Gengo interface whose method arity doesn't match the native arity" {
+    net_state.clearPolicyRules();
+    _ = net_state.addPolicyRule(.allow, "*", 0);
+    defer net_state.clearPolicyRules();
+
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{"net"},
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    switch (rt.run(
+        \\net := import("cap:net")
+        \\type BadCloser interface { close(x int) bool }
+        \\func takeBadCloser(c BadCloser) bool { return true }
+        \\func doDialAndCheckBadInterface() bool {
+        \\    conn := net.dial("tcp", "example.com:443")
+        \\    return takeBadCloser(conn)
+        \\}
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+
+    var state = FakeCapNetState{};
+    net_state.setNetHandlers(fake_cap_net_handlers, @ptrCast(&state));
+    defer net_state.resetHandlers();
+
+    switch (rt.call("doDialAndCheckBadInterface", &.{})) {
+        .ok => return error.TestUnexpectedResult,
+        .runtime_error => |e| try std.testing.expectEqual(error.TypeError, e.kind),
+    }
+}
+
 // Scenario 3: accept's would-block result (host handler returns 0, "no
 // connection yet") must surface as a catchable [null, err] pair rather than
 // blocking or crashing — net_state.netListenerAccept maps rc==0 to
@@ -10050,6 +10142,65 @@ test "compiler: std.fmt.format float verbs short-circuit on NaN/+Inf/-Inf regard
     try std.testing.expectEqualStrings("-Inf", try vms.asStringValue(try rt.callGlobal("negInfG", &.{})));
 }
 
+// fmtFloat's plain '-' sign prefix (only reached for a finite negative value,
+// after the NaN/Inf short-circuits above already claimed the sign-bit-set
+// cases), fmtF64Fixed's precision arms 4 and 7..16 (existing tests only ever
+// hit 0, 1, 2, 5, and 6), fmtF64Sci's round-up carry (mantissa rounds to
+// 10.0 at the requested precision, forcing exp+1 and a mantissa/10 backoff),
+// its abs_v==0.0 fast path (only reachable via a direct %e/%E verb -- %g's
+// zero case short-circuits one level up in fmtF64General before ever
+// calling into Sci), and the mantissa renormalization branches (mant>=10.0
+// / mant<1.0) that only misfire deep in the exponent range near f64's
+// minimum magnitude, where floor(log10(v)) and v/10^exp disagree by one ULP
+// of exponent -- none of this had coverage anywhere else in this file. Note
+// these two literals must stay inside roughly 1e-280..1e-308: Gengo's own
+// hand-rolled float literal parser (common.zig's parseFloat) computes
+// `ip / pow(10, exp)` for a negative exponent, and pow(10, exp) itself
+// overflows to +Inf for exp beyond ~308, silently underflowing the whole
+// literal to 0.0 instead of the intended subnormal -- e.g. `1e-320` parses
+// as exactly 0.0 in Gengo today. That's a separate, real bug in
+// src/lang/common.zig (out of scope for this file), not exercised further
+// here.
+test "compiler: std.fmt.format float verbs: negative sign, extra fixed precisions, sci zero/carry/renormalization" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func negFixed() string { return std.fmt.format("%f", -1234.5) }
+        \\func prec4() string { return std.fmt.format("%.4f", 1234.5) }
+        \\func prec7() string { return std.fmt.format("%.7f", 1234.5) }
+        \\func prec8() string { return std.fmt.format("%.8f", 1234.5) }
+        \\func prec9() string { return std.fmt.format("%.9f", 1234.5) }
+        \\func prec10() string { return std.fmt.format("%.10f", 1234.5) }
+        \\func prec11() string { return std.fmt.format("%.11f", 1234.5) }
+        \\func prec12() string { return std.fmt.format("%.12f", 1234.5) }
+        \\func prec13() string { return std.fmt.format("%.13f", 1234.5) }
+        \\func prec14() string { return std.fmt.format("%.14f", 1234.5) }
+        \\func prec15() string { return std.fmt.format("%.15f", 1234.5) }
+        \\func prec16() string { return std.fmt.format("%.16f", 1234.5) }
+        \\func sciZero() string { return std.fmt.format("%e", 0.0) }
+        \\func sciRoundCarry() string { return std.fmt.format("%.2e", 9.999) }
+        \\func sciMantGe10() string { return std.fmt.format("%e", 1.0000000001e-308) }
+        \\func sciMantLt1() string { return std.fmt.format("%e", 9.9999999999999e-280) }
+    );
+    try std.testing.expectEqualStrings("-1234.500000", try vms.asStringValue(try rt.callGlobal("negFixed", &.{})));
+    try std.testing.expectEqualStrings("1234.5000", try vms.asStringValue(try rt.callGlobal("prec4", &.{})));
+    try std.testing.expectEqualStrings("1234.5000000", try vms.asStringValue(try rt.callGlobal("prec7", &.{})));
+    try std.testing.expectEqualStrings("1234.50000000", try vms.asStringValue(try rt.callGlobal("prec8", &.{})));
+    try std.testing.expectEqualStrings("1234.500000000", try vms.asStringValue(try rt.callGlobal("prec9", &.{})));
+    try std.testing.expectEqualStrings("1234.5000000000", try vms.asStringValue(try rt.callGlobal("prec10", &.{})));
+    try std.testing.expectEqualStrings("1234.50000000000", try vms.asStringValue(try rt.callGlobal("prec11", &.{})));
+    try std.testing.expectEqualStrings("1234.500000000000", try vms.asStringValue(try rt.callGlobal("prec12", &.{})));
+    try std.testing.expectEqualStrings("1234.5000000000000", try vms.asStringValue(try rt.callGlobal("prec13", &.{})));
+    try std.testing.expectEqualStrings("1234.50000000000000", try vms.asStringValue(try rt.callGlobal("prec14", &.{})));
+    try std.testing.expectEqualStrings("1234.500000000000000", try vms.asStringValue(try rt.callGlobal("prec15", &.{})));
+    try std.testing.expectEqualStrings("1234.5000000000000000", try vms.asStringValue(try rt.callGlobal("prec16", &.{})));
+    try std.testing.expectEqualStrings("0.000000e+00", try vms.asStringValue(try rt.callGlobal("sciZero", &.{})));
+    try std.testing.expectEqualStrings("1.00e+01", try vms.asStringValue(try rt.callGlobal("sciRoundCarry", &.{})));
+    try std.testing.expectEqualStrings("1.000000e-308", try vms.asStringValue(try rt.callGlobal("sciMantGe10", &.{})));
+    try std.testing.expectEqualStrings("1.000000e-279", try vms.asStringValue(try rt.callGlobal("sciMantLt1", &.{})));
+}
+
 test "compiler: std.fmt.format %s precision truncates bytes, %t formats booleans, %c emits a rune" {
     var rt = try setup();
     defer rt.deinit();
@@ -10162,6 +10313,70 @@ test "compiler: std.fmt.stringify formats struct/array/map/named-error/variant o
     try std.testing.expectEqualStrings("Shape.circle(5)", try vms.asStringValue(try rt.callGlobal("variantRecordStr", &.{})));
     try std.testing.expectEqualStrings("Shape.tag(hi)", try vms.asStringValue(try rt.callGlobal("variantPayloadStr", &.{})));
     try std.testing.expectEqualStrings("Shape.point", try vms.asStringValue(try rt.callGlobal("variantNoPayloadStr", &.{})));
+}
+
+// sprintValueDepth's remaining branches, none reachable from the previous
+// stringify test: a decimal value (decimalRawAndScale short-circuit before
+// the main switch), a rune value, NaN/+Inf/-Inf (the plain %v/stringify
+// float path, distinct from fmtFloat's own NaN/Inf short-circuit exercised
+// via std.fmt.format elsewhere), a heap dyn_string and a string_view (as
+// opposed to the static .string Value already covered), a bare type
+// reference for struct/interface/named/enum/variant types, an enum value,
+// a variant constructor referenced without being called, a named_value
+// (boxed because its base is `string` -- scalar int/float/bool named types
+// are erased to the bare value at construction and never reach this
+// branch), and a multi-field record-arm variant value (exercises the ", "
+// separator in both the measuring and the writing pass, since the existing
+// variantRecordStr test above only used a single-field arm) plus a
+// multi-entry map (same separator, map branch).
+test "compiler: std.fmt.stringify covers decimal/rune/NaN-Inf/type-object/enum-value/variant-ctor/named-value/multi-field branches" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Money decimal 2
+        \\type Square struct { side int }
+        \\type Shape interface { area() int }
+        \\type Meter int
+        \\type Color enum { red, green, blue }
+        \\type Boxed variant { ok(v int), bad }
+        \\type Label string
+        \\type ShapeV variant { circle { radius float, label string }, tag(n int), point }
+        \\func decimalStr() string { return std.fmt.stringify(Money(9.99)) }
+        \\func runeStr() string { return std.fmt.stringify(`A`) }
+        \\func nanStr() string { return std.fmt.stringify(std.math.nan()) }
+        \\func infStr() string { return std.fmt.stringify(std.math.inf) }
+        \\func negInfStr() string { return std.fmt.stringify(-std.math.inf) }
+        \\func dynStringStr() string { a := "he"; b := "llo"; return std.fmt.stringify(a + b) }
+        \\func stringViewStr() string { return std.fmt.stringify(std.bytes.slice("hello world", 0, 5)) }
+        \\func structTypeStr() string { return std.fmt.stringify(Square) }
+        \\func interfaceTypeStr() string { return std.fmt.stringify(Shape) }
+        \\func namedTypeStr() string { return std.fmt.stringify(Meter) }
+        \\func enumTypeStr() string { return std.fmt.stringify(Color) }
+        \\func enumValueStr() string { return std.fmt.stringify(Color.red) }
+        \\func variantTypeStr() string { return std.fmt.stringify(Boxed) }
+        \\func variantCtorStr() string { ctor := Boxed.ok; return std.fmt.stringify(ctor) }
+        \\func namedValueStr() string { l := Label("hi"); return std.fmt.stringify(l) }
+        \\func multiFieldVariantStr() string { return std.fmt.stringify(ShapeV.circle{radius: 5.0, label: "x"}) }
+        \\func multiEntryMapStr() string { return std.fmt.stringify({"a": 1, "b": 2}) }
+    );
+    try std.testing.expectEqualStrings("9.99", try vms.asStringValue(try rt.callGlobal("decimalStr", &.{})));
+    try std.testing.expectEqualStrings("A", try vms.asStringValue(try rt.callGlobal("runeStr", &.{})));
+    try std.testing.expectEqualStrings("NaN", try vms.asStringValue(try rt.callGlobal("nanStr", &.{})));
+    try std.testing.expectEqualStrings("Inf", try vms.asStringValue(try rt.callGlobal("infStr", &.{})));
+    try std.testing.expectEqualStrings("-Inf", try vms.asStringValue(try rt.callGlobal("negInfStr", &.{})));
+    try std.testing.expectEqualStrings("hello", try vms.asStringValue(try rt.callGlobal("dynStringStr", &.{})));
+    try std.testing.expectEqualStrings("hello", try vms.asStringValue(try rt.callGlobal("stringViewStr", &.{})));
+    try std.testing.expectEqualStrings("<struct Square>", try vms.asStringValue(try rt.callGlobal("structTypeStr", &.{})));
+    try std.testing.expectEqualStrings("<interface Shape>", try vms.asStringValue(try rt.callGlobal("interfaceTypeStr", &.{})));
+    try std.testing.expectEqualStrings("<type Meter>", try vms.asStringValue(try rt.callGlobal("namedTypeStr", &.{})));
+    try std.testing.expectEqualStrings("<enum Color>", try vms.asStringValue(try rt.callGlobal("enumTypeStr", &.{})));
+    try std.testing.expectEqualStrings("red", try vms.asStringValue(try rt.callGlobal("enumValueStr", &.{})));
+    try std.testing.expectEqualStrings("<variant Boxed>", try vms.asStringValue(try rt.callGlobal("variantTypeStr", &.{})));
+    try std.testing.expectEqualStrings("Boxed.ok", try vms.asStringValue(try rt.callGlobal("variantCtorStr", &.{})));
+    try std.testing.expectEqualStrings("hi", try vms.asStringValue(try rt.callGlobal("namedValueStr", &.{})));
+    try std.testing.expectEqualStrings("ShapeV.circle(5, x)", try vms.asStringValue(try rt.callGlobal("multiFieldVariantStr", &.{})));
+    try std.testing.expectEqualStrings("{a: 1, b: 2}", try vms.asStringValue(try rt.callGlobal("multiEntryMapStr", &.{})));
 }
 
 // A predicate-bearing named array/map element type was only checked at
