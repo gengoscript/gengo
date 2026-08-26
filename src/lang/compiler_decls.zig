@@ -340,10 +340,10 @@ pub fn methodDecl(c: anytype) !void {
         c.advance(); // consume '['
         while (true) {
             if (c.cur.typ != .ident) return c.err("expected type parameter name, found {s}", .{c.tokenName(c.cur.typ)});
+            if (recv_tparam_count >= ct.MaxTypeParams) return c.err("too many receiver type parameters (max {d})", .{ct.MaxTypeParams});
             recv_tparams[recv_tparam_count] = .{ .name = c.cur.src, .constraint = "" };
             c.advance();
             recv_tparam_count += 1;
-            if (recv_tparam_count > ct.MaxTypeParams) return c.err("too many receiver type parameters (max {d})", .{ct.MaxTypeParams});
             if (!c.match(.comma)) break;
             if (c.check(.rbracket)) break;
         }

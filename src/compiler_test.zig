@@ -16553,3 +16553,1027 @@ test "compiler: std.core.clone covers string_view, non-empty string_builder, enu
     try std.testing.expect((try rt.callGlobal("cloneNativeFunctionPassesThrough", &.{})).boolean);
     try std.testing.expect((try rt.callGlobal("cloneNamedErrorTypeItselfPassesThrough", &.{})).boolean);
 }
+
+// ── compiler_decls.zig third coverage pass (2026-08-26) ─────────────────────
+// Two prior passes covered the compile-time constant evaluator, generic
+// struct/variant/func arg-count and constraint errors, named error/task/
+// interface/method decl gaps, and enum/array-keyword edge cases. This pass
+// targets emitZeroValue/emitNamedDefault's remaining reachable branches (bare
+// `var x TYPE` with no initializer, for every TYPE shape whose zero value
+// isn't already exercised), the handful of duplicate/conflict checks each
+// decl body repeats for itself (interface/struct/variant all have their own
+// copy of the hasAnyTypeName/hasGlobalFunc guards), every decl body's
+// c.inFunc() "declared as a local" branch (struct/interface/variant/enum/
+// named-array/named-map/generic-alias/task/named-error, each a distinct call
+// site), the MaxLocals/MaxTypeParams resource ceilings that only interface
+// methods, generic receivers, struct fields, variant arms (all three shapes)
+// and variant shared fields still lacked, and a batch of parser edge cases
+// found by reading compiler_decls.zig line by line: isMethodDecl/
+// isNamedFuncDecl's malformed-input lookahead branches, a generic type used
+// as a plain type ANNOTATION (as opposed to a struct-literal expression,
+// which is the only shape every existing generic test used), a generic
+// variant type alias, and a handful of typeArgLabel/satisfiesConstraint
+// branches for constraint violations on a type_param/named_t/variant_t/
+// interface_t argument (only struct_t had a test before).
+
+// emitZeroValue: bare `var x TYPE` (no initializer) for the primitive/
+// collection/nominal shapes that weren't already covered — bigint and rune
+// among primitives (int/float/bool/string were already covered), and the
+// map/error/actor/interface/variant TypeCheck variants (array's bare form
+// goes through a completely different, already-covered code path; see the
+// dead-code note in the final report for why .assert_arr's own copy in
+// emitZeroValue can never actually run).
+test "compiler: a bare 'var x bigint' with no initializer zero-inits to bigint 0" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() int {
+        \\    var x bigint
+        \\    return std.conv.to_int(x)
+        \\}
+        \\std := import("std")
+    );
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("f", &.{})).int);
+}
+
+test "compiler: a bare 'var x rune' with no initializer zero-inits to rune 0" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() int {
+        \\    var x rune
+        \\    return int(x)
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("f", &.{})).int);
+}
+
+test "compiler: a bare 'var x map[K]V', 'var x error', and 'var x actor' each zero-init without a runtime assertion" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func fm() int {
+        \\    var m map[string]int
+        \\    return std.core.len(m)
+        \\}
+        \\func fe() bool {
+        \\    var e error
+        \\    return e == null
+        \\}
+        \\func fa() bool {
+        \\    var a actor
+        \\    var b actor
+        \\    return a == b
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("fm", &.{})).int);
+    try std.testing.expect((try rt.callGlobal("fe", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("fa", &.{})).boolean);
+}
+
+test "compiler: a bare 'var x SomeInterface' and 'var x SomeVariant' with no initializer zero-init to null" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Shape interface { area() int }
+        \\type Opt variant { some(v int), none }
+        \\func fi() bool {
+        \\    var s Shape
+        \\    return s == null
+        \\}
+        \\func fv() bool {
+        \\    var o Opt
+        \\    return o == null
+        \\}
+    );
+    try std.testing.expect((try rt.callGlobal("fi", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("fv", &.{})).boolean);
+}
+
+// emitNamedDefault: the no-'default'-clause zero value for every named-type
+// base that wasn't already covered (int/string were already exercised via
+// other tests) — float/decimal/rune/bool scalars and named array/map types.
+// (has_default's own array_t/map_t/enum_t arms, and the no-default enum_t
+// arm, are dead from this function's sole caller; see the final report.)
+test "compiler: a bare named-type var declaration zero-inits float/decimal/rune/bool/array/map bases with no 'default' clause" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type F float
+        \\type Dm decimal 2
+        \\type R rune
+        \\type B bool
+        \\type Arr []int
+        \\type M map[string]int
+        \\func f1() float { var v F; return float(v) }
+        \\func f2() int { var v Dm; return int(v) }
+        \\func f3() int { var v R; return int(v) }
+        \\func f4() bool { var v B; return bool(v) }
+        \\func f5() int { var v Arr; return std.core.len(v) }
+        \\func f6() int { var v M; return std.core.len(v) }
+    );
+    try std.testing.expectEqual(@as(f64, 0.0), (try rt.callGlobal("f1", &.{})).float);
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("f2", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("f3", &.{})).int);
+    try std.testing.expect(!(try rt.callGlobal("f4", &.{})).boolean);
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("f5", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("f6", &.{})).int);
+}
+
+// ── interfaceDeclBody: duplicate/conflict checks and resource ceilings ─────
+
+test "compiler: an interface name colliding with an existing struct type is a compile error (DuplicateNamedType)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateNamedType, compile(&rt,
+        \\type Foo struct { x int }
+        \\type Foo interface { m() int }
+    ));
+}
+
+test "compiler: an interface name colliding with an existing function is a compile error (DuplicateField)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateField, compile(&rt,
+        \\func Foo() int { return 1 }
+        \\type Foo interface { m() int }
+    ));
+}
+
+test "compiler: an interface with more than MaxLocals methods is a compile error (TooManyFields)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "type Big interface {\n");
+    var i: u32 = 0;
+    var buf: [32]u8 = undefined;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        const line = try std.fmt.bufPrint(&buf, "m{d}() int\n", .{i});
+        try src.appendSlice(std.testing.allocator, line);
+    }
+    try src.appendSlice(std.testing.allocator, "}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyFields, r.err);
+}
+
+test "compiler: an interface method with more than MaxLocals parameters is a compile error (TooManyParams)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "type Big interface {\nf(");
+    var i: u32 = 0;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        if (i > 0) try src.appendSlice(std.testing.allocator, ",");
+        try src.appendSlice(std.testing.allocator, "int");
+    }
+    try src.appendSlice(std.testing.allocator, ") int\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyParams, r.err);
+}
+
+test "compiler: an interface method with more than MaxLocals return types is a compile error (TooManyParams)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "type Big interface {\nf() (");
+    var i: u32 = 0;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        if (i > 0) try src.appendSlice(std.testing.allocator, ",");
+        try src.appendSlice(std.testing.allocator, "int");
+    }
+    try src.appendSlice(std.testing.allocator, ")\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyParams, r.err);
+}
+
+// An interface method's parameter list allows a bare-type variadic (no name
+// needed, unlike a real function — see isMethodDecl's sibling parser's own
+// comment on why the bare-type form is allowed for interface specs).
+test "compiler: an interface method may declare a bare-type variadic parameter" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Summable interface { sum(...int) int }
+    );
+}
+
+test "compiler: an interface type declared inside a function body is a local" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func outer() int {
+        \\    type Shape interface { area() int }
+        \\    return 0
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("outer", &.{})).int);
+}
+
+// ── isMethodDecl / isNamedFuncDecl: malformed-input lookahead branches ─────
+// These two functions are pure lexer lookaheads (no registry access) used to
+// decide whether `func` at a decl boundary starts a method, a generic named
+// function, or a plain one. Their bracket/eof-scanning branches are only
+// reachable via deliberately malformed source; the actual parse that follows
+// then fails for an unrelated, expected reason.
+
+test "compiler: a truncated generic method receiver (EOF inside the brackets) is a compile error, not a hang" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expect(std.meta.isError(compile(&rt, "func (s T[")));
+}
+
+test "compiler: a generic method receiver with a nested bracket in its type-parameter list is still recognized as a method decl" {
+    var rt = try setup();
+    defer rt.deinit();
+    // isMethodDecl's lookahead only tracks bracket depth textually; it
+    // doesn't validate that what's inside is a legal type-parameter list.
+    // `T[[]int]` nests a bracket pair one level deep, exercising the
+    // depth += 1 arm before the matching depth -= 1 closes it back out.
+    // The actual parse (methodDecl) then fails because 'T' isn't a
+    // registered generic type — that's the expected, unrelated error.
+    try std.testing.expectError(error.UnexpectedToken, compile(&rt, "func (s T[[]int]) m() {}"));
+}
+
+test "compiler: a truncated generic function type-parameter list (EOF before ']') is a compile error, not a hang" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expect(std.meta.isError(compile(&rt, "func f[T")));
+}
+
+test "compiler: a stray non-identifier token inside a generic function's bracketed type-parameter list is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expect(std.meta.isError(compile(&rt, "func f[T, 5](x int) int { return x }")));
+}
+
+// ── methodDecl: receiver type-param ceiling and local-scope declaration ────
+
+test "compiler: a method receiver with more than MaxTypeParams type parameters is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnexpectedToken, compile(&rt,
+        \\type Box[T] struct { v T }
+        \\func (s Box[A,B,C,D,E,F,G,H,I]) m() int { return 0 }
+    ));
+}
+
+test "compiler: a method declared inside a function body is a local" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func outer() int {
+        \\    type Foo struct { x int }
+        \\    func (f Foo) m() int { return f.x }
+        \\    return 0
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("outer", &.{})).int);
+}
+
+// methodDecl's own copy of the global-function-count ceiling (namedFuncDecl's
+// copy already has coverage) — fill the shared global_count counter with
+// cheap top-level consts (no heap allocation, unlike struct/func objects)
+// up to MaxGlobals, then declare exactly one method as the final, tipping
+// declaration.
+test "compiler: declaring a method after the global function/const table is full is a compile error (TooManyGlobals)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    var i: u32 = 0;
+    var buf: [32]u8 = undefined;
+    while (i < ct.MaxGlobals) : (i += 1) {
+        const line = try std.fmt.bufPrint(&buf, "const c{d} = 0\n", .{i});
+        try src.appendSlice(std.testing.allocator, line);
+    }
+    try src.appendSlice(std.testing.allocator, "type S struct { x int }\nfunc (s S) m() int { return 1 }\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyGlobals, r.err);
+}
+
+// ── taskDeclBody / namedErrorTypeDecl / variantDeclBody: local declaration ──
+
+test "compiler: a task type declared inside a function body is a local" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func outer() int {
+        \\    type Worker task func() {}
+        \\    return 0
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("outer", &.{})).int);
+}
+
+test "compiler: a named error type declared inside a function body is a local" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func outer() int {
+        \\    type MyErr error
+        \\    return 0
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("outer", &.{})).int);
+}
+
+test "compiler: a variant type declared inside a function body is a local" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func outer() int {
+        \\    type V variant { a, b }
+        \\    return 0
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("outer", &.{})).int);
+}
+
+// ── namedTypeDecl: duplicate/conflict checks, local declaration for every
+// shape, enum member ceiling, and the decimal-scale-override branch ────────
+
+test "compiler: a plain named-type name colliding with an existing struct type is a compile error (DuplicateNamedType)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateNamedType, compile(&rt,
+        \\type Foo struct { x int }
+        \\type Foo int
+    ));
+}
+
+test "compiler: a plain named-type name colliding with an existing function is a compile error (DuplicateField)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateField, compile(&rt,
+        \\func Foo() int { return 1 }
+        \\type Foo int
+    ));
+}
+
+test "compiler: an enum with more than MaxLocals members is a compile error (TooManyFields)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "type Big enum {\n");
+    var i: u32 = 0;
+    var buf: [16]u8 = undefined;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        if (i > 0) try src.appendSlice(std.testing.allocator, ",");
+        const m = try std.fmt.bufPrint(&buf, "m{d}", .{i});
+        try src.appendSlice(std.testing.allocator, m);
+    }
+    try src.appendSlice(std.testing.allocator, "\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyFields, r.err);
+}
+
+test "compiler: an enum type, a named array/map type, and a generic-instantiation alias each declared inside a function body are locals" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func outerEnum() int {
+        \\    type Color enum { red, green }
+        \\    return 0
+        \\}
+        \\func outerArr() int {
+        \\    type IntList []int
+        \\    return 0
+        \\}
+        \\func outerMap() int {
+        \\    type M map[string]int
+        \\    return 0
+        \\}
+        \\func outerAlias() int {
+        \\    type Stack[T] struct { items []T }
+        \\    type LocalIntStack Stack[int]
+        \\    return 0
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("outerEnum", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("outerArr", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("outerMap", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("outerAlias", &.{})).int);
+}
+
+// namedTypeDecl's decimal-scale branch for a NON-primitive base ("Named-type
+// alias: scale is inherited from parent; an explicit number overrides") —
+// only the primitive `type X decimal N` form (which requires the scale) had
+// coverage; aliasing an existing decimal named type while overriding its
+// inherited scale did not.
+test "compiler: a decimal named-type alias can override its parent's inherited scale with an explicit number" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type D decimal 2
+        \\type D2 D 4
+        \\func f() string { return string(D2(1)) }
+    );
+    _ = try rt.callGlobal("f", &.{});
+}
+
+// ── structDeclBody: duplicate/conflict checks, field-count ceiling, missing
+// type annotation, local declaration, and a func-typed field ───────────────
+
+test "compiler: a struct name colliding with an existing interface type is a compile error (DuplicateNamedType)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateNamedType, compile(&rt,
+        \\type Foo interface { m() int }
+        \\type Foo struct { x int }
+    ));
+}
+
+test "compiler: a struct name colliding with an existing function is a compile error (DuplicateField)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateField, compile(&rt,
+        \\func Foo() int { return 1 }
+        \\type Foo struct { x int }
+    ));
+}
+
+test "compiler: a struct with more than MaxLocals fields is a compile error (TooManyFields)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "type Big struct {\n");
+    var i: u32 = 0;
+    var buf: [16]u8 = undefined;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        if (i > 0) try src.appendSlice(std.testing.allocator, ",");
+        const f = try std.fmt.bufPrint(&buf, "f{d} int", .{i});
+        try src.appendSlice(std.testing.allocator, f);
+    }
+    try src.appendSlice(std.testing.allocator, "\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyFields, r.err);
+}
+
+test "compiler: a struct field with no type annotation at all is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expect(std.meta.isError(compile(&rt,
+        \\type S struct { x }
+    )));
+}
+
+test "compiler: a struct type declared inside a function body is a local" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func outer() int {
+        \\    type Point struct { x int }
+        \\    return 0
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("outer", &.{})).int);
+}
+
+// checkStructFieldType's func_t branch (recursing into a func-typed field's
+// param/return specs) had no test at all — every other struct-field-type
+// test uses a scalar/array/map/interface/optional field.
+test "compiler: a struct field typed as a function stores and calls the assigned function" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Node struct { cb func(int) int }
+        \\func addOne(x int) int { return x + 1 }
+        \\func f() int {
+        \\    n := Node{ cb: addOne }
+        \\    return n.cb(5)
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 6), (try rt.callGlobal("f", &.{})).int);
+}
+
+// ── subtypeDecl: duplicate/conflict checks, enum-subtype ceiling, local
+// declaration, capturing predicate + message clause, default-outside-range ─
+
+test "compiler: an enum subtype name colliding with an existing named type is a compile error (DuplicateNamedType)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateNamedType, compile(&rt,
+        \\type Days enum { mon, tue, wed }
+        \\type Dup int
+        \\subtype Dup Days { mon }
+    ));
+}
+
+test "compiler: an enum subtype with more than MaxLocals members is a compile error (TooManyFields)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "type Days enum { mon }\nsubtype Weekend Days {\n");
+    var i: u32 = 0;
+    var buf: [16]u8 = undefined;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        if (i > 0) try src.appendSlice(std.testing.allocator, ",");
+        const m = try std.fmt.bufPrint(&buf, "m{d}", .{i});
+        try src.appendSlice(std.testing.allocator, m);
+    }
+    try src.appendSlice(std.testing.allocator, "\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyFields, r.err);
+}
+
+test "compiler: an enum subtype declared inside a function body is a local" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Days enum { mon, tue, wed }
+        \\func outer() int {
+        \\    subtype Weekend Days { mon }
+        \\    return 0
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 0), (try rt.callGlobal("outer", &.{})).int);
+}
+
+test "compiler: a scalar subtype name colliding with an existing named type is a compile error (DuplicateNamedType)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateNamedType, compile(&rt,
+        \\type Base int
+        \\type Dup int
+        \\subtype Dup Base range 0..5
+    ));
+}
+
+// subtypeDecl's own copy of the in-function capturing-predicate fix (issue
+// #211's regression test only exercised namedTypeDecl's copy) plus the
+// 'message' clause, which had no test at either subtypeDecl or namedTypeDecl.
+test "compiler: an in-function scalar subtype's capturing predicate with a custom message reports that message on failure" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func make(threshold int, val int) int {
+        \\    type Base int
+        \\    subtype Strict Base predicate func(x) { return x >= threshold } message "too small"
+        \\    return int(Strict(val))
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 5), (try rt.callGlobal("make", &.{ .{ .int = 5 }, .{ .int = 5 } })).int);
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("make", &.{ .{ .int = 5 }, .{ .int = 1 } }));
+    try std.testing.expect(std.mem.indexOf(u8, rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len], "too small") != null);
+}
+
+test "compiler: a subtype's default value outside its own range is a compile error, even though clamp/range default checks were only tested on named types" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.RangeError, compile(&rt,
+        \\type Base int
+        \\subtype Strict Base range 0..10 default 50
+    ));
+}
+
+// ── variantDeclBody: duplicate/conflict checks (zero coverage before this),
+// every arm shape's field/arm-count ceiling and duplicate-name check, and
+// local declaration ─────────────────────────────────────────────────────────
+
+test "compiler: a duplicate variant type name is a compile error (DuplicateVariantType)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateVariantType, compile(&rt,
+        \\type V variant { a, b }
+        \\type V variant { c, d }
+    ));
+}
+
+test "compiler: a variant name colliding with an existing struct type is a compile error (DuplicateVariantType)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateVariantType, compile(&rt,
+        \\type Foo struct { x int }
+        \\type Foo variant { a, b }
+    ));
+}
+
+test "compiler: a variant name colliding with an existing function is a compile error (DuplicateField)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateField, compile(&rt,
+        \\func Foo() int { return 1 }
+        \\type Foo variant { a, b }
+    ));
+}
+
+test "compiler: a variant with more than MaxLocals single-payload arms is a compile error (TooManyLocals)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "type Big variant {\n");
+    var i: u32 = 0;
+    var buf: [24]u8 = undefined;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        if (i > 0) try src.appendSlice(std.testing.allocator, ",");
+        const a = try std.fmt.bufPrint(&buf, "a{d}(int)", .{i});
+        try src.appendSlice(std.testing.allocator, a);
+    }
+    try src.appendSlice(std.testing.allocator, "\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyLocals, r.err);
+}
+
+test "compiler: a variant record arm with more than MaxLocals fields is a compile error (TooManyFields)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "type Big variant {\nrec {\n");
+    var i: u32 = 0;
+    var buf: [24]u8 = undefined;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        if (i > 0) try src.appendSlice(std.testing.allocator, ",");
+        const f = try std.fmt.bufPrint(&buf, "f{d} int", .{i});
+        try src.appendSlice(std.testing.allocator, f);
+    }
+    try src.appendSlice(std.testing.allocator, "\n}\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyFields, r.err);
+}
+
+test "compiler: a variant record arm field with no type annotation at all is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expect(std.meta.isError(compile(&rt,
+        \\type V variant { rec { x } }
+    )));
+}
+
+test "compiler: a variant with more than MaxLocals record arms is a compile error (TooManyLocals)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "type Big variant {\n");
+    var i: u32 = 0;
+    var buf: [24]u8 = undefined;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        if (i > 0) try src.appendSlice(std.testing.allocator, ",");
+        const a = try std.fmt.bufPrint(&buf, "r{d} {{ v int }}", .{i});
+        try src.appendSlice(std.testing.allocator, a);
+    }
+    try src.appendSlice(std.testing.allocator, "\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyLocals, r.err);
+}
+
+test "compiler: two variant record arms with the same name is a compile error (DuplicateField)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateField, compile(&rt,
+        \\type V variant { r1 { x int }, r1 { y int } }
+    ));
+}
+
+test "compiler: a variant with more than MaxLocals no-payload arms is a compile error (TooManyLocals)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "type Big variant {\n");
+    var i: u32 = 0;
+    var buf: [16]u8 = undefined;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        if (i > 0) try src.appendSlice(std.testing.allocator, ",");
+        const a = try std.fmt.bufPrint(&buf, "a{d}", .{i});
+        try src.appendSlice(std.testing.allocator, a);
+    }
+    try src.appendSlice(std.testing.allocator, "\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyLocals, r.err);
+}
+
+test "compiler: two no-payload variant arms with the same name is a compile error (DuplicateField)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateField, compile(&rt,
+        \\type V variant { a, a }
+    ));
+}
+
+test "compiler: a variant with more than MaxLocals shared fields is a compile error (TooManyFields)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "type Big variant {\n");
+    var i: u32 = 0;
+    var buf: [16]u8 = undefined;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        if (i > 0) try src.appendSlice(std.testing.allocator, ",");
+        const f = try std.fmt.bufPrint(&buf, "f{d} int", .{i});
+        try src.appendSlice(std.testing.allocator, f);
+    }
+    try src.appendSlice(std.testing.allocator, "\n}\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyFields, r.err);
+}
+
+test "compiler: two variant shared fields with the same name is a compile error (DuplicateField)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.DuplicateField, compile(&rt,
+        \\type V variant { count int, count int }
+    ));
+}
+
+test "compiler: a variant type declared inside a function body is a local (variantDeclBody's own copy)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func outer() int {
+        \\    type V variant { ok(v int), bad }
+        \\    v := V.ok(3)
+        \\    switch v {
+        \\        case .ok as n { return n }
+        \\        case .bad { return -1 }
+        \\    }
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 3), (try rt.callGlobal("outer", &.{})).int);
+}
+
+// ── parseConstraintBounds / parseConstPrimary / parseNamedDefault /
+// parseSignedNumber: remaining parser edge cases ────────────────────────────
+
+test "compiler: a range whose minimum exceeds its maximum is a compile error (RangeError)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.RangeError, compile(&rt,
+        \\type X int range 10..5
+    ));
+}
+
+test "compiler: a boolean literal 'false' used as a range bound is rejected as a non-constant expression, same as 'true'" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.CompileTimeConstant, compile(&rt,
+        \\type Z int range false..10
+    ));
+}
+
+// parseNamedDefault's final `else` arm ("'default' not supported for this
+// base type") is unreachable for a primitive base (namedTypeDecl only
+// recognizes 'default' after int/float/decimal/string/bool/rune primitives
+// take a distinct branch above it) but IS reachable when the base is
+// inherited from a parent named array/map type via the aliasing path.
+test "compiler: 'default' is not supported for a named array-type alias (parseNamedDefault's else arm)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expect(std.meta.isError(compile(&rt,
+        \\type Arr []int
+        \\type Arr2 Arr default 5
+    )));
+}
+
+// parseSignedNumber's BadNumber path requires a `.number`-shaped token that
+// still fails common.parseFloat -- an incomplete hex literal ('0x' with no
+// hex digits after it) lexes as a complete number token but parses to null.
+test "compiler: an enum member's explicit value using an incomplete hex literal ('0x') is a compile error (BadNumber)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.BadNumber, compile(&rt,
+        \\type X enum { a = 0x }
+    ));
+}
+
+// ── Generic type used as a plain type ANNOTATION (function param, struct
+// field) rather than a struct-literal expression — every prior generic test
+// in this file only ever instantiated a generic type as a literal
+// (`Box[int]{...}`), which is parsed entirely in compiler_expr.zig and never
+// touches parseFieldTypeSpec's own generic-instantiation branch at all ────
+
+test "compiler: a generic struct type used as a plain function parameter annotation instantiates it" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Box[T] struct { val T }
+        \\func getVal(b Box[int]) int { return b.val }
+        \\func f() int { return getVal(Box[int]{val: 5}) }
+    );
+    try std.testing.expectEqual(@as(i64, 5), (try rt.callGlobal("f", &.{})).int);
+}
+
+// The DEFERRED form of the same branch (the type argument is itself a type
+// parameter, because the annotation appears inside another generic type's
+// own template body) for a generic VARIANT specifically — an existing
+// comment in substituteSpec already documents this exact shape for a generic
+// STRUCT nested in a generic struct; nothing exercised the variant_t analog.
+test "compiler: a generic variant type used as a field annotation inside another generic struct's template instantiates it" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Opt[T] variant { some(v T), none }
+        \\type Wrapper[T] struct { inner Opt[T] }
+        \\func f() int {
+        \\    w := Wrapper[int]{ inner: Opt[int].some(9) }
+        \\    switch w.inner {
+        \\        case .some as v { return v }
+        \\        case .none { return -1 }
+        \\    }
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 9), (try rt.callGlobal("f", &.{})).int);
+}
+
+// A generic-instantiation ALIAS (`type Alias Base[args]`) whose base is a
+// generic VARIANT, used as a type annotation elsewhere — only the generic
+// STRUCT alias shape (used by methodDecl's receiver) had coverage.
+test "compiler: a type alias of a generic variant instantiation can be used as a function parameter type" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Opt[T] variant { some(v T), none }
+        \\type IntOpt Opt[int]
+        \\func f(x IntOpt) int {
+        \\    switch x {
+        \\        case .some as v { return v }
+        \\        case .none { return -1 }
+        \\    }
+        \\}
+        \\func g() int { return f(Opt[int].some(7)) }
+    );
+    try std.testing.expectEqual(@as(i64, 7), (try rt.callGlobal("g", &.{})).int);
+}
+
+// substituteSpec's map key_spec/val_spec substitution (a generic struct field
+// typed map[K]V, where K and/or V are the struct's own type parameters) —
+// every existing generic-struct test used an array or scalar field, never a
+// map.
+test "compiler: a generic struct field typed map[K]V substitutes both the key and value type parameters on instantiation" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Box[K,V] struct { m map[K]V }
+        \\func f() int {
+        \\    b := Box[string,int]{ m: {"a": 1} }
+        \\    return b.m["a"]
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 1), (try rt.callGlobal("f", &.{})).int);
+}
+
+// ── Module-qualified type annotation edge cases (parseFieldTypeSpec's
+// `alias.TypeName` branch) ──────────────────────────────────────────────────
+
+test "compiler: a module-qualified type annotation naming a real function (not a type) in that module is a compile error" {
+    var rt = try setup();
+    defer rt.deinit();
+    const main_src =
+        \\dep := import("./dep")
+        \\func f() { for x dep.helper = 0; false; {} }
+    ;
+    const dep_src =
+        \\pub func helper() int { return 1 }
+    ;
+    const source_entries = [_]module_compile.SourceEntry{
+        .{ .path = "main.gengo", .source = main_src },
+        .{ .path = "dep.gengo", .source = dep_src },
+    };
+    try std.testing.expectError(error.UnexpectedToken, rt.compileOnly(main_src, "main.gengo", .{ .table = &source_entries }));
+}
+
+test "compiler: a module-qualified type annotation whose alias was never imported is a compile error (UnknownType)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.UnknownType, compile(&rt,
+        \\func f() { for x foo.Bar = 0; false; {} }
+    ));
+}
+
+// ── typeArgLabel / satisfiesConstraint: the type_param/named_t/variant_t/
+// interface_t branches of a ConstraintViolation error message — only
+// struct_t had a test (via a `numeric`-constrained struct type argument) ───
+
+test "compiler: passing an enclosing generic function's own (erased) type parameter to a numeric-constrained generic call is a ConstraintViolation" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.ConstraintViolation, compile(&rt,
+        \\func inner[T numeric](x T) T { return x }
+        \\func outer[U](x U) U { return inner[U](x) }
+    ));
+}
+
+test "compiler: a named-type argument whose base fails a 'numeric' constraint is a ConstraintViolation naming the named type" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.ConstraintViolation, compile(&rt,
+        \\type Flag bool
+        \\func numOnly[T numeric](x T) T { return x }
+        \\func g() { _ = numOnly[Flag](Flag(true)) }
+    ));
+}
+
+test "compiler: a variant-type argument to a 'numeric'-constrained generic call is a ConstraintViolation naming the variant type" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.ConstraintViolation, compile(&rt,
+        \\type Opt variant { some(v int), none }
+        \\func numOnly2[T numeric](x T) T { return x }
+        \\func g() { _ = numOnly2[Opt](Opt.none) }
+    ));
+}
+
+test "compiler: an interface-type argument to a 'numeric'-constrained generic call is a ConstraintViolation naming the interface" {
+    var rt = try setup();
+    defer rt.deinit();
+    try std.testing.expectError(error.ConstraintViolation, compile(&rt,
+        \\type Shape interface { area() int }
+        \\func numOnly3[T numeric](x T) T { return x }
+        \\func g() { _ = numOnly3[Shape](0) }
+    ));
+}
+
+// satisfiesConstraint's module-prefix dot-stripping fallback: inside a
+// module-compiled file, a locally-declared named type's FieldTypeAlt carries
+// the module-qualified name (e.g. "mymod.Meters"), but the type registry
+// still stores it under its bare local name — a direct lookup misses and the
+// dot-stripped fallback is what actually resolves it.
+test "compiler: a numeric-constrained generic call inside a compiled module resolves its own named-type argument via the dot-stripped registry lookup" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compileWithSession(&rt,
+        \\type Meters float
+        \\func biggest[T numeric](x T) T { return x }
+        \\func g() float { return biggest[Meters](Meters(5.0)) }
+    , "mymod");
+}
+
+test "compiler: a named string-type argument satisfies the 'ordered' constraint via satisfiesConstraint's named_t string check" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Label string
+        \\func biggestOrdered[T ordered](x T) T { return x }
+        \\func g() string { return biggestOrdered[Label](Label("a")) }
+    );
+    try std.testing.expectEqualStrings("a", try vms.asStringValue(try rt.callGlobal("g", &.{})));
+}
+
+// satisfiesConstraint's __compare__ fallback for a named (non-struct,
+// non-numeric, non-string) type — only the struct_t copy of this same qname
+// switch had a test.
+test "compiler: a named bool-type argument satisfies the 'ordered' constraint by declaring __compare__" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Flag2 bool
+        \\func (a Flag2) __compare__(b Flag2) int { return 0 }
+        \\func biggestOrdered2[T ordered](x T) T { return x }
+        \\func g() bool { return bool(biggestOrdered2[Flag2](Flag2(true))) }
+    );
+    try std.testing.expect((try rt.callGlobal("g", &.{})).boolean);
+}
+
+// ── parseFieldTypeSpec: func-type spec parameter/return-type ceilings and
+// the previously-untested parenthesized multi-return-type form ────────────
+
+test "compiler: a func-typed struct field with more than one return type in its parenthesized return list is accepted" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type S struct { cb func(int) (int, string) }
+    );
+}
+
+test "compiler: a func-type annotation with more than MaxLocals parameters is a compile error (TooManyParams)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "type S struct { cb func(");
+    var i: u32 = 0;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        if (i > 0) try src.appendSlice(std.testing.allocator, ",");
+        try src.appendSlice(std.testing.allocator, "int");
+    }
+    try src.appendSlice(std.testing.allocator, ") int }\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyParams, r.err);
+}
+
+test "compiler: a func-type annotation with more than MaxLocals parenthesized return types is a compile error (TooManyParams)" {
+    var rt = try setup();
+    defer rt.deinit();
+    var src: std.ArrayListUnmanaged(u8) = .empty;
+    defer src.deinit(std.testing.allocator);
+    try src.appendSlice(std.testing.allocator, "type S struct { cb func(int) (");
+    var i: u32 = 0;
+    while (i <= ct.MaxLocals) : (i += 1) {
+        if (i > 0) try src.appendSlice(std.testing.allocator, ",");
+        try src.appendSlice(std.testing.allocator, "int");
+    }
+    try src.appendSlice(std.testing.allocator, ") }\n");
+    const r = compileAndInspect(&rt, src.items);
+    try std.testing.expectEqual(error.TooManyParams, r.err);
+}
