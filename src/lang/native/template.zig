@@ -791,8 +791,10 @@ pub fn tplAddFunc(ctx: VMContext, tmpl_obj: *Object, name: []const u8, func_val:
             const m_now = funcs_obj.map_managed;
             @memcpy(new_items[0..old_len], m_now[0..old_len]);
             new_items[old_len] = .{ .key = .{ .string = try ctx.cs.internStr(name) }, .value = func_val };
-            ctx.hs.freeManagedSlice(MapEntry, m_now);
+            // Publish before freeing the old slice so paranoia doesn't see a
+            // live object (funcs_obj) still pointing at the bytes being freed.
             funcs_obj.* = .{ .map_managed = new_items[0 .. old_len + 1] };
+            ctx.hs.freeManagedSlice(MapEntry, m_now);
         },
         else => return error.TypeError,
     }

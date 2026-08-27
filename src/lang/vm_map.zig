@@ -168,8 +168,11 @@ pub fn mapSet(ctx: VMContext, container: Value, key: Value, val: Value) !void {
     const items_now = try vms.asMapSlice(container.object);
     @memcpy(ext[0..old_len], items_now);
     ext[old_len] = .{ .key = key, .value = val };
-    if (container.object.* == .map_managed) ctx.hs.freeManagedSlice(MapEntry, container.object.map_managed);
+    // Publish before freeing the old slice so paranoia doesn't see a live
+    // object (container.object) still pointing at the bytes being freed.
+    const old_to_free: ?[]MapEntry = if (container.object.* == .map_managed) container.object.map_managed else null;
     container.object.* = .{ .map_managed = ext[0..new_len] };
+    if (old_to_free) |old| ctx.hs.freeManagedSlice(MapEntry, old);
     if (new_len > 8) {
         const bcount = mapBucketsForCount(new_len);
         const buckets = try vmgc.vmAllocManagedSlice(ctx, i32, bcount);
