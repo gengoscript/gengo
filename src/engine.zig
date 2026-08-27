@@ -119,7 +119,14 @@ const MaxHostModules = 16;
 const MaxHostModuleFuncs = 64;
 const MaxErrorLen = 512;
 const MaxStringScratch = 4096;
-const MaxImportScratch = 16384;
+// Must match cfg.max_input_bytes: a module loaded through the import-loader
+// callback has to fit in this scratch buffer in one shot (the callback ABI
+// has no "there's more" signal), so capping it below the compiler's own
+// max module/script size silently truncates larger modules instead of
+// rejecting them -- the truncated source then fails deep inside the parser
+// with a confusing, seemingly-unrelated syntax error instead of a clear
+// "module too large" diagnostic.
+const MaxImportScratch = cfg.max_input_bytes;
 const HostModuleCallIdBase = 0x1000;
 
 // Init-time error buffer: populated when engine_init_with_config fails validation.
@@ -365,6 +372,15 @@ fn importLoaderWrapper(ctx: *anyopaque, path: []const u8) anyerror!?[]const u8 {
         if (result > 0) {
             const written = @as(usize, @intCast(result));
             if (written > engine.import_scratch.len) return error.ImportLoaderFailed;
+            // The callback ABI can only report bytes written, not "there was
+            // more past out_max_len" -- so a completely full buffer is
+            // indistinguishable from an exact fit. Treat it as truncation
+            // (matching source_io.zig's readFile, which resolves the same
+            // ambiguity with an explicit probe read) rather than silently
+            // handing the compiler a cut-off module: a real file this close
+            // to the limit is exceedingly rare, while a clear error beats a
+            // baffling downstream parse failure on truncated source.
+            if (written == engine.import_scratch.len) return error.InputTooLong;
             return engine.import_scratch[0..written];
         }
         if (result < 0) return error.ImportLoaderFailed;

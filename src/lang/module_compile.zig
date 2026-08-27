@@ -676,7 +676,19 @@ pub const Session = struct {
                         "import paths must start with '.', 'cap:', or 'host:'; got '{s}'",
                         .{mod_path},
                     ),
-                    else => {},
+                    error.InputTooLong => self.setScanError(
+                        "module '{s}' exceeds the {d}-byte source size limit",
+                        .{ mod_path, cfg.max_input_bytes },
+                    ),
+                    // Fallback so a compile error can never reach the host
+                    // with an empty message: every named error case above
+                    // covers one with useful, path-qualified context, but an
+                    // unlisted kind (or one added later) would otherwise
+                    // leave last_error_msg_len at 0 with nothing to show.
+                    else => self.setScanError(
+                        "compiling '{s}': {s}",
+                        .{ mod_path, @errorName(err) },
+                    ),
                 }
             }
             return err;
