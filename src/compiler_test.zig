@@ -3170,6 +3170,72 @@ test "compiler: typed float expression comparison result" {
     try std.testing.expect(r3 == .boolean and r3.boolean);
 }
 
+// Coverage-audit 2026-09: the `a == b or a != b or a < b or a > b` test
+// above never actually runs its own `a < b`/`a > b` clauses at runtime —
+// for any two floats, `a == b or a != b` is a tautology (exactly one side
+// is always true), so `or`'s short-circuit means those first two clauses
+// always decide the whole expression, and `lt_float`/`gt_float`'s success
+// path (vm.zig ~3082-3091/3092-3101) never executes despite the sibling
+// "opcodes fire" test proving the bytecode contains them. `le_float`/
+// `ge_float`'s success path was never driven at all (no prior test).
+// Isolating each comparison into its own function, with no short-circuiting
+// sibling clause, actually exercises all four.
+test "compiler: typed float lt/gt/le/ge comparisons actually execute their success path (not short-circuited)" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func cmpLt(a float, b float) bool { return a < b }
+        \\func cmpGt(a float, b float) bool { return a > b }
+        \\func cmpLe(a float, b float) bool { return a <= b }
+        \\func cmpGe(a float, b float) bool { return a >= b }
+    );
+    try std.testing.expect((try rt.callGlobal("cmpLt", &.{ .{ .float = 3.0 }, .{ .float = 4.0 } })).boolean);
+    try std.testing.expect(!(try rt.callGlobal("cmpLt", &.{ .{ .float = 4.0 }, .{ .float = 3.0 } })).boolean);
+    try std.testing.expect((try rt.callGlobal("cmpGt", &.{ .{ .float = 5.0 }, .{ .float = 4.0 } })).boolean);
+    try std.testing.expect(!(try rt.callGlobal("cmpGt", &.{ .{ .float = 3.0 }, .{ .float = 4.0 } })).boolean);
+    try std.testing.expect((try rt.callGlobal("cmpLe", &.{ .{ .float = 4.0 }, .{ .float = 4.0 } })).boolean);
+    try std.testing.expect(!(try rt.callGlobal("cmpLe", &.{ .{ .float = 5.0 }, .{ .float = 4.0 } })).boolean);
+    try std.testing.expect((try rt.callGlobal("cmpGe", &.{ .{ .float = 4.0 }, .{ .float = 4.0 } })).boolean);
+    try std.testing.expect(!(try rt.callGlobal("cmpGe", &.{ .{ .float = 3.0 }, .{ .float = 4.0 } })).boolean);
+}
+
+// Coverage-audit 2026-09: vm.zig's setBinaryTypeError builds a refined error
+// message when a failed binary op's two operands are BOTH named types
+// sharing the same base primitive with no subtype/common-ancestor relation
+// ("cannot apply 'op' to A and B; convert one side explicitly..."), distinct
+// from its plain-TypeError fallback. No existing test reached it. It only
+// fires when the underlying VALUES also genuinely fail the op — same-base
+// named ints (e.g. Meters(5) + Seconds(3)) just add their erased int values
+// fine, no error at all — so two same-base named *string* types subtracted
+// (strings don't support '-') was the reliable way in, confirmed first via
+// the CLI (`gengo run`, panicked with exactly this message) before writing
+// the test. Routed through `any`-typed params so the compiler can't
+// statically prove/reject the mismatch itself and defers to this runtime
+// check.
+test "compiler: subtracting two unrelated same-base named string types reports the named-type-specific TypeError message" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+    switch (rt.run(
+        \\type A string
+        \\type B string
+        \\func subAny(a any, b any) any { return a - b }
+        \\func bad() any { return subAny(A("x"), B("y")) }
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+    switch (rt.call("bad", &.{})) {
+        .runtime_error => |e| {
+            try std.testing.expectEqual(error.TypeError, e.kind);
+            try std.testing.expect(std.mem.indexOf(u8, e.msg, "cannot apply '-' to A and B") != null);
+        },
+        .ok => return error.ExpectedTypeError,
+    }
+}
+
 // ── expression depth limit ──────────────────────────────────────────────────
 
 test "compiler: expression too deep returns error" {
@@ -14786,6 +14852,40 @@ test "compiler: std.core.append on a named array type validates each new element
     try std.testing.expectError(error.PredicateFailed, rt.callGlobal("appendPredicateViolation", &.{}));
     try std.testing.expectError(error.TypeError, rt.callGlobal("appendTypeMismatch", &.{}));
     try std.testing.expect((try rt.callGlobal("appendedResultStaysArray", &.{})).boolean);
+}
+
+// Coverage-audit 2026-09: vm.zig's validateErasedNamedValueForSpec's `.map`
+// case (recursing into a map-typed spec's own key/value specs) was never
+// exercised — the array-append test above only ever drives its sibling
+// `.array` case. opSetIndex's own `nt.base == .map_t` branch (the one that
+// calls validateErasedNamedValueForSpec with a value spec at all) only
+// reaches the `.map` case inside that function when the value spec ITSELF
+// describes a map — i.e. a named map type whose value type is *another*
+// map holding a predicate-checked named scalar. `m["a"] = {"x": 200}`
+// assigns a whole inner map literal as `Nested`'s value; validating it
+// walks every entry of that literal and re-runs Score's full construction
+// (range) + predicate chain on each raw scalar value, the same as the
+// array test's elements — confirmed end-to-end via the CLI (`gengo run`)
+// before writing this, panicking with `PredicateFailed: ... Score(200)`.
+test "compiler: assigning into a named map-of-maps validates the inner map's values against the nested named scalar's predicate" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Score int predicate func(x) { return x >= 0 and x <= 100 }
+        \\type Nested map[string]map[string]Score
+        \\func setValid() bool {
+        \\    var m Nested = {}
+        \\    m["a"] = {"x": 50}
+        \\    return true
+        \\}
+        \\func setInvalid() bool {
+        \\    var m Nested = {}
+        \\    m["a"] = {"x": 200}
+        \\    return true
+        \\}
+    );
+    try std.testing.expect((try rt.callGlobal("setValid", &.{})).boolean);
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("setInvalid", &.{}));
 }
 
 // ── std.core.remove: front/end-shift branches (second coverage pass) ──────
