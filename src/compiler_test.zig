@@ -2672,6 +2672,26 @@ test "compiler: fused global-sub call IC gives correct result" {
     try std.testing.expect(r == .int and r.int == 10);
 }
 
+// Coverage-audit 2026-09: attempted to close vm.zig's uncovered
+// `get_global_call_tail`/`call_global_global_tail` handlers (the tail-call
+// siblings of `get_global_call`/`call_global_global`, both of which ARE
+// covered). Traced fusion_pass.zig's actual round-by-round algorithm and
+// confirmed empirically via `gengo disasm` (both `target(g_arg)` returned
+// directly, and the local-func-value `f(g_arg)` form) that neither ever
+// forms: `fuseOnce`'s Pass B scans strictly left-to-right and, on hitting a
+// `get_global` immediately followed by `call` with argc>0, ALWAYS commits
+// to the `get_global_call` (non-tail) fusion in that same visitation
+// (`decideAt`'s fuse branch consumes both instructions via
+// `ip += inst.width + b_inst.width`) — `call`'s own start position is never
+// separately revisited in that round, so the sibling `if (a == .call and b
+// == .ret) return .flip_tail` rule (which only matches the literal `.call`
+// opcode, never `get_global_call`) can't apply to it, this round or any
+// later one. The two ops appear to be dead code given the current fusion
+// algorithm's ordering — not attempted further; see [[project-audit-2026-09]]
+// round 6 for the full trace. `get_global_call`/`call_global_global`
+// (non-tail) are already covered via "fused global-sub call" above and
+// pre-existing tests.
+
 // ── const_sub fusion ──────────────────────────────────────────────────────
 
 test "compiler: const_sub fusion fires" {
@@ -5072,6 +5092,93 @@ test "fusion: global assignment as a loop's last statement fuses to set_global_l
     );
     const c = rt.chunk_state;
     try std.testing.expectEqual(@as(usize, 1), countOp(c, .set_global_loop));
+}
+
+// Coverage-audit 2026-09: vm.zig's `inc_global_const_loop`/
+// `inc_global_const_loop_nc` dispatch handlers (the loop-back-edge variants
+// of `inc_global_const`, closing an upvalue first when the loop var is
+// captured) had no test at all — every existing `inc_global_const`/
+// `set_global_loop` fusion test above uses `g = i` (plain assignment) or a
+// non-last-statement compound-add, never `g = g + <const>` as the loop's
+// own last statement. Per fusion_pass.zig's pairFusionFull: `inc_global_const`
+// (itself `get_global_const_add` + `set_global`, same name) fused with a
+// following `close_upvalue_loop` becomes `inc_global_const_loop`; fused with
+// a following bare `loop` (uncaptured loop var, no close_upvalue) becomes
+// `inc_global_const_loop_nc`.
+test "fusion: global compound-add as a loop's last statement (uncaptured loop var) fuses to inc_global_const_loop_nc" {
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\g := 0
+        \\func loopGlobalInc(n int) int {
+        \\    i := 0
+        \\    for i < n {
+        \\        i = i + 1
+        \\        g = g + 1
+        \\    }
+        \\    return g
+        \\}
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .inc_global_const_loop_nc));
+}
+
+test "fusion: global compound-add as a loop's last statement (captured loop var) fuses to inc_global_const_loop" {
+    // The closure must NOT be bound to a named local (`f := func...`) —
+    // that local's own end-of-iteration scope-exit `pop` lands between
+    // `g = g + 1`'s `inc_global_const` and `close_upvalue_loop`, breaking
+    // the adjacency pairFusionFull requires (confirmed by disassembling
+    // both shapes: a named-local closure leaves `inc_global_const; pop;
+    // close_upvalue_loop`, three separate ops; passing the closure as a
+    // bare call argument — consumed immediately, no local slot — leaves
+    // `inc_global_const` directly adjacent to `close_upvalue_loop`).
+    var rt = try setup();
+    defer rt.deinit();
+    try compile(&rt,
+        \\g := 0
+        \\func consume(fn func() int) int { return fn() }
+        \\func loopGlobalIncCaptured(n int) int {
+        \\    for i := 0; i < n; i++ {
+        \\        consume(func() int { return i })
+        \\        g = g + 1
+        \\    }
+        \\    return g
+        \\}
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .inc_global_const_loop));
+}
+
+test "fusion: inc_global_const_loop and inc_global_const_loop_nc both give correct results" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\g := 0
+        \\func loopGlobalInc(n int) int {
+        \\    i := 0
+        \\    for i < n {
+        \\        i = i + 1
+        \\        g = g + 1
+        \\    }
+        \\    return g
+        \\}
+    );
+    const r1 = try rt.callGlobal("loopGlobalInc", &.{.{ .int = 5 }});
+    try std.testing.expect(r1 == .int and r1.int == 5);
+
+    try runSrc(&rt,
+        \\g := 0
+        \\func consume(fn func() int) int { return fn() }
+        \\func loopGlobalIncCaptured(n int) int {
+        \\    for i := 0; i < n; i++ {
+        \\        consume(func() int { return i })
+        \\        g = g + 1
+        \\    }
+        \\    return g
+        \\}
+    );
+    const r2 = try rt.callGlobal("loopGlobalIncCaptured", &.{.{ .int = 4 }});
+    try std.testing.expect(r2 == .int and r2.int == 4);
 }
 
 test "fusion: local = local + local fuses to the 4-window local_add_local" {
