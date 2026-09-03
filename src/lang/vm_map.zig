@@ -1,3 +1,4 @@
+const std = @import("std");
 const common = @import("common.zig");
 const vms = @import("vm_state.zig");
 const VMContext = vms.VMContext;
@@ -278,4 +279,42 @@ pub fn mapInsertHashed(ctx: VMContext, obj: *Object, key: Value, val: Value) !vo
         slot = (slot + 1) & mask;
     }
     return error.OutOfMemory;
+}
+
+// Coverage-audit 2026-09: the pure key/hash/probe helpers below have no
+// VMContext/heap dependency, so their edge cases are cheaper to prove
+// directly than through a compiled Gengo program.
+
+test "mapHashValue: actor_ref hashes deterministically and by value, not identity" {
+    const a: Value = .{ .actor_ref = .{ .index = 1, .generation = 1 } };
+    const a_again: Value = .{ .actor_ref = .{ .index = 1, .generation = 1 } };
+    const b: Value = .{ .actor_ref = .{ .index = 2, .generation = 1 } };
+    try std.testing.expectEqual(mapHashValue(a), mapHashValue(a_again));
+    try std.testing.expect(mapHashValue(a) != mapHashValue(b));
+}
+
+test "mapFindLinear: returns null when key is absent" {
+    var items = [_]MapEntry{.{ .key = .{ .int = 1 }, .value = .{ .int = 10 } }};
+    try std.testing.expectEqual(@as(?usize, null), mapFindLinear(&items, .{ .int = 999 }));
+}
+
+test "mapFindHashedIndex: returns null after probing a fully-occupied table with no match" {
+    // Every bucket holds a valid, distinct entry index (no -1 sentinel
+    // anywhere), so a miss can only be discovered by exhausting the
+    // fixed-length probe loop (chunk_verifier-style "prove the fallback
+    // path" test — this table shape can't arise from mapInsertHashed's own
+    // growth invariant, which never lets load factor reach 100%).
+    var entries = [_]MapEntry{
+        .{ .key = .{ .int = 10 }, .value = .{ .int = 1 } },
+        .{ .key = .{ .int = 20 }, .value = .{ .int = 2 } },
+        .{ .key = .{ .int = 30 }, .value = .{ .int = 3 } },
+        .{ .key = .{ .int = 40 }, .value = .{ .int = 4 } },
+    };
+    var buckets = [_]i32{ 0, 1, 2, 3 };
+    try std.testing.expectEqual(@as(?usize, null), mapFindHashedIndex(&entries, &buckets, .{ .int = 999 }));
+}
+
+test "mapGet: TypeError on a non-map object" {
+    var obj: Object = .{ .array = &[_]Value{} };
+    try std.testing.expectError(error.TypeError, mapGet(&obj, .{ .int = 1 }));
 }

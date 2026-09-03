@@ -1511,6 +1511,113 @@ test "chunk: verify context on BadConstantIndex" {
     try std.testing.expect(std.mem.indexOf(u8, msg, "ip=0") != null);
 }
 
+// Coverage-audit 2026-09: chunk_verifier.zig's per-fused-op "expected
+// embedded sub-opcode" checks (verify()'s first linear-scan switch) were
+// only ever exercised for get_local_const_eq. Every sibling fused op has
+// the identical shape — a hand-crafted skip byte that doesn't match the
+// op's hardcoded embedded opcode must trip BadOpcode, the same way a
+// corrupted or maliciously-crafted .gbc file's bytecode would. Table-
+// driven across every remaining case in that switch (idx_off is the byte
+// offset of the u16 constant-pool index the op reads; the byte right
+// before it is always the checked "skip" byte, always left as 0 here —
+// 0 is Op.halt, never one of the embedded ops any of these checks expect,
+// so it reliably fails every comparison without needing per-case values).
+test "chunk: verify catches BadOpcode for every fused embedded-op mismatch" {
+    const Case = struct { op: Op, width: u8, idx_off: u8 };
+    const cases = [_]Case{
+        .{ .op = .get_local_const_sub, .width = 5, .idx_off = 3 },
+        .{ .op = .get_local_const_add, .width = 5, .idx_off = 3 },
+        .{ .op = .get_local_const_lt, .width = 5, .idx_off = 3 },
+        .{ .op = .get_local_const_gt, .width = 5, .idx_off = 3 },
+        .{ .op = .get_local_const_gt_jif_pop, .width = 9, .idx_off = 3 },
+        .{ .op = .get_global_const_eq, .width = 8, .idx_off = 6 },
+        .{ .op = .get_global_const_sub, .width = 8, .idx_off = 6 },
+        .{ .op = .get_global_const_add, .width = 8, .idx_off = 6 },
+        .{ .op = .get_global_const_lt, .width = 8, .idx_off = 6 },
+        .{ .op = .get_local_const_eq_jif_pop, .width = 9, .idx_off = 3 },
+        .{ .op = .get_local_const_lt_jif_pop, .width = 9, .idx_off = 3 },
+        .{ .op = .get_global_const_lt_jif_pop, .width = 12, .idx_off = 6 },
+        .{ .op = .get_local_const_sub_call, .width = 8, .idx_off = 3 },
+        .{ .op = .call_global_local_sub_const, .width = 13, .idx_off = 8 },
+        .{ .op = .call_global_local_sub_const_tail, .width = 13, .idx_off = 8 },
+        .{ .op = .get_local_get_field, .width = 8, .idx_off = 3 },
+        .{ .op = .local_add_field, .width = 9, .idx_off = 4 },
+    };
+
+    for (cases) |c| {
+        var rt = try setup();
+        defer rt.deinit();
+
+        chunk.setActive(rt.chunk_state);
+        globals.setActive(&rt.globals_state);
+        heap.setActive(&rt.heap_state);
+        chunk.reset();
+        globals.reset();
+        heap.reset();
+
+        // Two constants registered so idx=1 clears the earlier
+        // BadConstantIndex check and reaches the embedded-opcode switch.
+        try chunk.emitConst(.{ .int = 42 }, 1);
+        try chunk.emitConst(.{ .int = 99 }, 1);
+
+        var i: u8 = 0;
+        while (i < c.width) : (i += 1) {
+            if (i == 0) {
+                try chunk.emitByte(@intFromEnum(c.op), 1);
+            } else if (i == c.idx_off) {
+                try chunk.emitByte(0, 1);
+            } else if (i == c.idx_off + 1) {
+                try chunk.emitByte(1, 1);
+            } else {
+                try chunk.emitByte(0, 1);
+            }
+        }
+
+        std.testing.expectError(error.BadOpcode, chunk.verify()) catch |err| {
+            std.debug.print("case op={s}: {}\n", .{ @tagName(c.op), err });
+            return err;
+        };
+    }
+}
+
+test "chunk: verify catches local slot out of range at entry (InvalidBytecode)" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+
+    // Top level starts with local_base=0 and depth=0, so any get_local
+    // (even slot 0) reads outside the currently-valid range.
+    try chunk.emitOp(.get_local, 1);
+    try chunk.emitByte(0, 1);
+
+    try std.testing.expectError(error.InvalidBytecode, chunk.verify());
+}
+
+test "chunk: verify catches upvalue index out of range (InvalidBytecode)" {
+    var rt = try setup();
+    defer rt.deinit();
+
+    chunk.setActive(rt.chunk_state);
+    globals.setActive(&rt.globals_state);
+    heap.setActive(&rt.heap_state);
+    chunk.reset();
+    globals.reset();
+    heap.reset();
+
+    // Top level captures nothing (upvalue_count=0), so any get_upvalue
+    // index, even 0, is out of range.
+    try chunk.emitOp(.get_upvalue, 1);
+    try chunk.emitByte(0, 1);
+
+    try std.testing.expectError(error.InvalidBytecode, chunk.verify());
+}
+
 test "compiler: std math abs direct call lowers to intrinsic op" {
     var rt = try setup();
     defer rt.deinit();
@@ -8093,6 +8200,58 @@ test "cap:fs read/write/exists/list/delete/mkdir round-trip through a real temp 
     }
 }
 
+// Coverage-audit 2026-09: cap_env.zig's own tests call envGet/envListPosix
+// directly, never through dispatch() — so the switch that routes
+// cap_env_get/cap_env_list native-function IDs, pulls the arg off the VM
+// stack, and pushes the result was entirely unexercised natively (only the
+// WASM conformance runner's tests/spec/cap/004_env_import.gengo reaches it,
+// and that runs under wasmtime, outside kcov's instrumentation). Driving it
+// through a real compiled+run script is the same shape as the cap:fs
+// round-trip test above.
+test "cap:env get/list round-trip through dispatch(), including a missing key" {
+    const cap_env = @import("lang/native/cap_env.zig");
+    const entries = [_:null]?[*:0]const u8{"GENGO_COVERAGE_TEST_VAR=hello"};
+    cap_env.setEnvironBlock(.{ .slice = &entries });
+    defer cap_env.setEnvironBlock(.empty);
+
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{"env"},
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    switch (rt.run(
+        \\env := import("cap:env")
+        \\func doGet() string {
+        \\    return env.get("GENGO_COVERAGE_TEST_VAR")
+        \\}
+        \\func doGetMissing() bool {
+        \\    return env.get("GENGO_COVERAGE_TEST_VAR_NOPE") == null
+        \\}
+        \\func doListLen() int {
+        \\    std := import("std")
+        \\    return std.core.len(env.list())
+        \\}
+    )) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+
+    switch (rt.call("doGet", &.{})) {
+        .ok => |v| try std.testing.expectEqualStrings("hello", try vms.asStringValue(v)),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    switch (rt.call("doGetMissing", &.{})) {
+        .ok => |v| try std.testing.expect(v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    switch (rt.call("doListLen", &.{})) {
+        .ok => |v| try std.testing.expectEqual(@as(i64, 1), v.int),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+}
+
 // Fake host driver for cap:fs tests below: an in-memory virtual filesystem
 // backing a `.driver` mount (fs_state.MountKind.driver), exercising
 // cap_fs.zig's driver-path branches (the `if (lr.mount.kind == .driver)`
@@ -9838,6 +9997,60 @@ test "compiler: std.core.has/std.core.delete raise TypeError on a non-map object
     try std.testing.expectError(error.TypeError, rt.callGlobal("deleteOnArray", &.{}));
 }
 
+// Coverage-audit 2026-09: every map *literal* compiles through vm.zig's
+// build_map, which always produces .map_hashed immediately (even for `{}`)
+// — see build_map's opcode handler. So vm_map.mapSet's "append to a small
+// linear-scan .map/.map_managed, promoting to .map_hashed past 8 entries"
+// branch, and mapDelete's .map/.map_managed branch, are dead from every
+// ordinary Gengo map literal. The only way a plain (non-hashed) .map or
+// .map_managed value ever reaches a script is through specific native
+// results that build one directly: std.core.gc_stats() (a fixed 3-entry
+// .map) and std.json.parse of an empty JSON object ("{}", a 0-entry .map).
+// Both are used here to actually exercise the append/promote/delete code
+// paths a real script can only reach this way, not a contrived one.
+test "compiler: native-returned plain .map/.map_managed values exercise mapSet's append/promote and mapDelete's non-hashed branch" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func deletesFromPlainMap() bool {
+        \\    // std.core.gc_stats() returns a genuine 3-entry .map, untouched
+        \\    // by any insert — delete must hit mapDelete's plain-.map branch,
+        \\    // not the .map_managed one.
+        \\    stats := std.core.gc_stats()
+        \\    removed := std.core.delete(stats, "heap_used_bytes")
+        \\    return not std.core.is_null(removed) and std.core.len(stats) == 2 and not std.core.has(stats, "heap_used_bytes")
+        \\}
+        \\func insertThenDeleteFromManagedMap() bool {
+        \\    // Setting a key gc_stats() didn't already have appends via
+        \\    // mapSet's linear-growth path (new_len=4, stays <=8, so no
+        \\    // promotion) — mapSet always republishes as .map_managed after
+        \\    // an append, so the delete below hits mapDelete's other branch.
+        \\    stats := std.core.gc_stats()
+        \\    stats["extra"] = 42
+        \\    removed := std.core.delete(stats, "extra")
+        \\    return removed == 42 and std.core.len(stats) == 3
+        \\}
+        \\func growsPastEightPromotesToHashed() bool {
+        \\    // std.json.parse("{}") is the only way to get a genuinely empty
+        \\    // (0-entry) .map — every map literal is .map_hashed from birth.
+        \\    // 9 sequential new-key inserts force mapSet's own >8 promotion.
+        \\    m := std.json.parse("{}")
+        \\    for i := 0; i < 9; i += 1 {
+        \\        m[std.conv.to_string(i)] = i
+        \\    }
+        \\    ok := std.core.len(m) == 9
+        \\    for i := 0; i < 9; i += 1 {
+        \\        if m[std.conv.to_string(i)] != i { ok = false }
+        \\    }
+        \\    return ok
+        \\}
+    );
+    try std.testing.expect((try rt.callGlobal("deletesFromPlainMap", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("insertThenDeleteFromManagedMap", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("growsPastEightPromotesToHashed", &.{})).boolean);
+}
+
 // Plain int+int/int-int/int*int throughout the dispatch loop (the main
 // add/sub/mul opcodes, `+=`/inc-const fast paths, and the various fused
 // local/global/field/const/loop opcodes) used to do raw, unchecked i64
@@ -11366,6 +11579,314 @@ test "compiler: std.core.gc_stats/gc_stats_ext report sane fields; gc/gc_live_ob
     try std.testing.expect((try rt.callGlobal("gcLiveObjectsNonNegative", &.{})).boolean);
     try std.testing.expect((try rt.callGlobal("errorRoundTrip", &.{})).boolean);
     try std.testing.expect((try rt.callGlobal("namedErrorIsError", &.{})).boolean);
+}
+
+// Coverage-audit 2026-09: drainMarkQueue (vm_gc.zig) has a dedicated switch
+// arm for several object kinds that no existing test ever held alive across
+// an actual std.core.gc() call — .inline_variant (a payload-less variant
+// arm, which lives inline rather than as a heap object but still roots its
+// type through markValue's own special case), .enum_value, and the
+// first-class function objects a named/enum type's .succ/.pred/.from_int
+// field access materializes (.named_type_fn/.enum_type_fn) when stored
+// instead of called immediately. Every case here assigns to a local (a real
+// GC root via the VM stack) and only then triggers a collection, so a
+// use-after-free from an under-marked object would show up as wrong output,
+// not just a crash.
+test "compiler: collectGarbage keeps an inline variant, enum value, and named/enum type-fn object alive across a real GC pass" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Color enum { red, green, blue }
+        \\type Shape variant { point, tag(label string) }
+        \\type Step int range 1..100
+        \\func keepsInlineVariantAlive() bool {
+        \\    s := Shape.point
+        \\    std.core.gc()
+        \\    return std.core.type_of(s) == "Shape"
+        \\}
+        \\func keepsEnumValueAlive() bool {
+        \\    c := Color.green
+        \\    std.core.gc()
+        \\    return c == Color.green and c != Color.red
+        \\}
+        \\func keepsNamedTypeFnAlive() bool {
+        \\    f := Step.succ
+        \\    std.core.gc()
+        \\    return int(f(Step(50))) == 51
+        \\}
+        \\func keepsEnumTypeFnAlive() bool {
+        \\    g := Color.from_int
+        \\    std.core.gc()
+        \\    return g(1) == Color.green
+        \\}
+    );
+    try std.testing.expect((try rt.callGlobal("keepsInlineVariantAlive", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("keepsEnumValueAlive", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("keepsNamedTypeFnAlive", &.{})).boolean);
+    try std.testing.expect((try rt.callGlobal("keepsEnumTypeFnAlive", &.{})).boolean);
+}
+
+// Coverage-audit 2026-09: makeDynStringFromObj (vm_gc.zig) special-cases
+// three source object kinds so it can re-derive bytes after its own
+// allocation might compact the heap; only the .dyn_string and
+// .string_builder arms had ever been exercised (via named-string casts and
+// std.string.builder respectively). A .string_view source — the object
+// std.bytes.slice returns — reaches this same function whenever a
+// string_view is cast to a named string type, and had never been used that
+// way in the suite.
+test "compiler: casting a string_view to a named string type exercises makeDynStringFromObj's string_view branch" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Name string
+        \\func viewToNamedString() string {
+        \\    // bytes.slice only returns a zero-copy string_view when the
+        \\    // source is itself a GC-managed object — a static string
+        \\    // literal source (immortal, constant-pool) instead takes the
+        \\    // slow copying path and never produces a string_view. A
+        \\    // concatenation of two literals doesn't work either: the
+        \\    // compiler constant-folds it back into an immortal literal
+        \\    // before bytes.slice ever runs. std.conv.to_string's result
+        \\    // can't be folded, so it's genuinely GC-managed at runtime.
+        \\    view := std.bytes.slice(std.conv.to_string(123456), 1, 4)
+        \\    n := Name(view)
+        \\    return string(n)
+        \\}
+    );
+    try std.testing.expectEqualStrings("234", try vms.asStringValue(try rt.callGlobal("viewToNamedString", &.{})));
+}
+
+// Coverage-audit 2026-09: constructing a named int-based type from a
+// non-integer float (vm_types.zig's constructNamedType .int case) had no
+// test — only the decimal/float/rune sibling bases' truncation checks were
+// covered.
+test "compiler: constructing a named int type from a non-integer float raises TypeError" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Meter int
+        \\func f() Meter { return Meter(3.5) }
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("f", &.{}));
+}
+
+// Coverage-audit 2026-09: fieldTypeAltStr (vm_types.zig) formats the
+// "expected <type>" half of a typed-parameter TypeError differently per
+// FieldTypeAlt kind. No existing test ever triggered a mismatch against a
+// map/interface/named-scalar/variant/func_t-typed parameter and inspected
+// the message, so 7 of its 9 branches (array/type_param were already
+// covered incidentally) had never actually run.
+test "compiler: a typed-parameter TypeError names the expected type for map/interface/named/variant/func_t/struct_t params" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Meters float
+        \\type Shape variant { point, tag(label string) }
+        \\type Shaped interface { area() int }
+        \\type Point struct { x int, y int }
+        \\func takesMap(m map[string]int) int { return std.core.len(m) }
+        \\func takesShaped(s Shaped) int { return 0 }
+        \\func takesMeters(m Meters) float { return float(m) }
+        \\func takesShape(s Shape) bool { return true }
+        \\func takesFn(f func(int) int) int { return f(1) }
+        \\func takesPoint(p Point) int { return p.x }
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("takesMap", &.{.{ .int = 1 }}));
+    try std.testing.expectEqualStrings("takesMap: arg 1: expected map[string]int, got int", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
+    try std.testing.expectError(error.TypeError, rt.callGlobal("takesShaped", &.{.{ .int = 1 }}));
+    try std.testing.expectEqualStrings("takesShaped: arg 1: expected Shaped, got int", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
+    try std.testing.expectError(error.TypeError, rt.callGlobal("takesMeters", &.{.{ .int = 1 }}));
+    try std.testing.expectEqualStrings("takesMeters: arg 1: expected Meters, got int", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
+    try std.testing.expectError(error.TypeError, rt.callGlobal("takesShape", &.{.{ .int = 1 }}));
+    try std.testing.expectEqualStrings("takesShape: arg 1: expected Shape, got int", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
+    try std.testing.expectError(error.TypeError, rt.callGlobal("takesFn", &.{.{ .int = 1 }}));
+    try std.testing.expectEqualStrings("takesFn: arg 1: expected func, got int", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
+    try std.testing.expectError(error.TypeError, rt.callGlobal("takesPoint", &.{.{ .int = 1 }}));
+    try std.testing.expectEqualStrings("takesPoint: arg 1: expected Point, got int", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
+}
+
+// Coverage-audit 2026-09: fieldTypeAltStr's .type_param branch only runs
+// through funcSignatureStr (building an ArityMismatch message's function
+// signature), since matchesTypeAlt's own .type_param case always matches
+// (a generic function's own erased type parameter can't fail an arg-type
+// check) — so it can never appear as the "expected" side of a TypeError,
+// only as one entry in a signature string built for an unrelated
+// ArityMismatch on the same function.
+test "compiler: an ArityMismatch on a generic function's signature names its type parameter" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f[T](x T, y T) T { return x }
+    );
+    try std.testing.expectError(error.ArityMismatch, rt.callGlobal("f", &.{.{ .int = 1 }}));
+    try std.testing.expectEqualStrings("f: expected 2 argument(s), got 1 for f(T, T)", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
+}
+
+// Coverage-audit 2026-09: matchesTypeAlt's subtype/deferred-generic
+// acceptance paths (a value whose exact runtime type differs from the
+// declared parameter type, but should still be accepted) had no positive
+// test: a scalar named-type subtype chain (namedTypeIsOrExtends walking
+// past the first, non-matching link — only reachable for a decimal/string/
+// array/map-based named type: int/float/rune/bool named types are erased
+// to the bare base value at construction, so they never reach here at all),
+// an enum subtype's restricted-member check (the parameter must be the
+// *subtype*, since a subtype enum has no separate storage of its own — a
+// value constructed via the base enum's own member syntax already carries
+// the base type, matching trivially; only a base-typed value arriving where
+// the *subtype* is declared needs the real membership walk), a >4-field
+// struct (the heap-backed .struct_instance representation, vs. the inline
+// .small_struct_instance every other struct test here uses), and a generic
+// function's own Box[T]/Opt[T]-typed parameter matching any concrete
+// instantiation at runtime (T is erased, so the match is by name prefix,
+// not exact identity).
+test "compiler: matchesTypeAlt accepts a scalar/enum subtype, a >4-field struct, and a generic function's own generic-typed parameter" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Meters decimal 2
+        \\subtype Feet Meters range 0..100
+        \\func takesMeters(m Meters) string { return string(m) }
+        \\func scalarSubtypeAccepted() string {
+        \\    f := Feet(50.5)
+        \\    return takesMeters(f)
+        \\}
+        \\type Colors enum { red, orange, blue }
+        \\subtype Warm Colors { orange }
+        \\func takesWarm(w Warm) string { return w.name }
+        \\func enumSubtypeAccepted() string {
+        \\    c := Colors.orange
+        \\    return takesWarm(c)
+        \\}
+        \\type Big struct { a int, b int, c int, d int, e int }
+        \\func takesBig(x Big) int { return x.a + x.e }
+        \\func bigStructAccepted() int {
+        \\    b := Big{a:1,b:2,c:3,d:4,e:5}
+        \\    return takesBig(b)
+        \\}
+        \\type Box[T] struct { val T }
+        \\func genericStructParam[T](b Box[T]) T { return b.val }
+        \\func genericStructAccepted() int { return genericStructParam(Box[int]{val: 42}) }
+        \\type Opt[T] variant { some(v T), none }
+        \\func genericVariantParam[T](o Opt[T]) int {
+        \\    switch o {
+        \\        case .some as v { return v }
+        \\        case .none { return -1 }
+        \\    }
+        \\}
+        \\func genericVariantAccepted() int { return genericVariantParam(Opt[int].some(7)) }
+    );
+    try std.testing.expectEqualStrings("50.5", try vms.asStringValue(try rt.callGlobal("scalarSubtypeAccepted", &.{})));
+    try std.testing.expectEqualStrings("orange", try vms.asStringValue(try rt.callGlobal("enumSubtypeAccepted", &.{})));
+    try std.testing.expectEqual(@as(i64, 6), (try rt.callGlobal("bigStructAccepted", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 42), (try rt.callGlobal("genericStructAccepted", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 7), (try rt.callGlobal("genericVariantAccepted", &.{})).int);
+}
+
+// Coverage-audit 2026-09: func_t's arity check (matchesTypeAlt) reads the
+// FuncObj through the `.closure` arm only when the argument is an actual
+// closure (captures an outer local) — every existing func_t test passed a
+// bare top-level function instead, which takes the sibling `.function` arm.
+test "compiler: a closure satisfies a func_t-typed parameter's arity check" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func apply(f func(int) int, x int) int { return f(x) }
+        \\func makeAdder(n int) func(int) int {
+        \\    return func(x int) int { return x + n }
+        \\}
+        \\func g() int { return apply(makeAdder(5), 10) }
+    );
+    try std.testing.expectEqual(@as(i64, 15), (try rt.callGlobal("g", &.{})).int);
+}
+
+// Coverage-audit 2026-09: runtimeTypeName's .named_error_value arm (a
+// `type X error`-declared named error type) was never exercised through
+// std.core.type_of — only its plain .error_value sibling was.
+test "compiler: std.core.type_of on a named error value reports the declared name" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type MyErr error
+        \\func f() string { return std.core.type_of(MyErr("boom")) }
+    );
+    try std.testing.expectEqualStrings("MyErr", try vms.asStringValue(try rt.callGlobal("f", &.{})));
+}
+
+// Coverage-audit 2026-09: enforceFuncReturnTypes' runtime mismatch path
+// (vm_types.zig) had never fired at all — every prior return-type mismatch
+// test in this suite was one the compiler could prove statically and reject
+// at compile time. Routing the bad value through std.json.parse (a
+// genuinely dynamic/erased result the compiler can't type-check ahead of
+// time) forces the runtime check to actually run, for both a named function
+// (single return) and two anonymous-closure shapes (single and multi
+// return) — the anonymous cases produce a different message (no function
+// name prefix), a second branch this had also never covered.
+test "compiler: a dynamically-typed bad return value raises TypeError at runtime, for named and anonymous, single and multi return" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func namedSingle() int {
+        \\    doc := std.json.parse("\"oops\"")
+        \\    return doc
+        \\}
+        \\func anonSingle() int {
+        \\    f := func() int {
+        \\        doc := std.json.parse("\"oops\"")
+        \\        return doc
+        \\    }
+        \\    return f()
+        \\}
+        \\func anonMulti() (int, int) {
+        \\    f := func() (int, int) {
+        \\        doc := std.json.parse("\"oops\"")
+        \\        return 1, doc
+        \\    }
+        \\    return f()
+        \\}
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("namedSingle", &.{}));
+    try std.testing.expectEqualStrings("namedSingle: expected return int, got string", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
+    try std.testing.expectError(error.TypeError, rt.callGlobal("anonSingle", &.{}));
+    try std.testing.expectEqualStrings("expected return int, got string", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
+    try std.testing.expectError(error.TypeError, rt.callGlobal("anonMulti", &.{}));
+    try std.testing.expectEqualStrings("return 2: expected int, got string", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
+}
+
+// Coverage-audit 2026-09: an anonymous closure's own argTypeError message
+// (vm_types.zig) omits the "name: " prefix a top-level function's does —
+// no existing test called an anonymous closure directly with a wrong-typed
+// argument.
+test "compiler: an anonymous closure's arg TypeError omits the function-name prefix" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func g() int {
+        \\    f := func(x int) int { return x + 1 }
+        \\    return f("hello")
+        \\}
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("g", &.{}));
+    try std.testing.expectEqualStrings("arg 1: expected int, got string", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
+}
+
+// Coverage-audit 2026-09: funcSignatureStr's variadic-parameter formatting
+// (vm_types.zig, the "type..." suffix appended to an ArityMismatch
+// message's function signature) only runs for a *typed* variadic function
+// called with too few fixed arguments — no existing test's variadic
+// arity-mismatch case used typed parameters.
+test "compiler: an ArityMismatch on a typed variadic function's signature includes the '...' suffix" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f(x int, ...nums int) int { return x }
+    );
+    try std.testing.expectError(error.ArityMismatch, rt.callGlobal("f", &.{}));
+    try std.testing.expectEqualStrings("f: expected at least 1 argument(s), got 0 for f(int, int...)", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
 }
 
 // ── std.string coverage ─────────────────────────────────────────────────

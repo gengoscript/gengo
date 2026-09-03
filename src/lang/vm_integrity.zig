@@ -113,6 +113,42 @@ test "capture snapshots a fresh VM's zeroed state and reports the unknown opcode
     try testing.expectEqual(@as(usize, 0), snap.temp_root_depth);
 }
 
+test "capture reports the real opcode name once ip points past a decoded instruction" {
+    const Runtime = @import("../runtime/runtime.zig").Runtime;
+    var rt: Runtime = undefined;
+    rt.initWithPolicy(.{ .allow_io = false }) catch return error.TestFailed;
+    defer rt.deinit();
+
+    // capture() reads codeByteAt(ip - 1) as "the instruction we just
+    // executed", so emitting one real opcode byte and pointing ip just past
+    // it exercises the in-range/known-opcode branch that the fresh-VM test
+    // above (ip == 0, falls straight to the "?" fallback) never reaches.
+    try chunk.emitOp(.halt, 1);
+    const ctx = VMContext.fromActive();
+    ctx.vs.ip = 1;
+
+    const snap = capture(ctx);
+    try testing.expectEqual(@as(usize, 1), snap.ip);
+    try testing.expectEqualStrings("halt", snap.opcode);
+}
+
+test "capture falls back to \"?\" when ip points past the end of the code" {
+    const Runtime = @import("../runtime/runtime.zig").Runtime;
+    var rt: Runtime = undefined;
+    rt.initWithPolicy(.{ .allow_io = false }) catch return error.TestFailed;
+    defer rt.deinit();
+
+    // ip > 0 (so the branch above's "fresh VM" case doesn't apply) but
+    // ip - 1 is still >= codeLen(): the `ip - 1 < ctx.cs.codeLen()` half of
+    // the guard, distinct from the ip == 0 case the first test covers.
+    try chunk.emitOp(.halt, 1);
+    const ctx = VMContext.fromActive();
+    ctx.vs.ip = 99;
+
+    const snap = capture(ctx);
+    try testing.expectEqualStrings("?", snap.opcode);
+}
+
 test "isIntegrityError classifies VM-integrity errors as true and everything else as false" {
     try testing.expect(isIntegrityError(error.InvalidChunkShape));
     try testing.expect(isIntegrityError(error.CorruptedObjectHandle));

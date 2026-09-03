@@ -714,6 +714,43 @@ test "readBytesRaw delegates whole-buffer reads straight to the override" {
     try testing.expectEqualStrings("hello", &buf);
 }
 
+// Coverage-audit 2026-09: readFd0's actual POSIX read(2) path (and
+// readBytesRaw's is_line=true byte-at-a-time loop that calls it directly,
+// bypassing read_override) had never run — every existing test here
+// installs an override first, which readBytesRaw/readAllBytesRaw both
+// check before ever reaching readFd0. Temporarily redirecting the real fd 0
+// to a pipe (the same std.Io.Threaded.pipe2 helper tls_common.zig's own
+// FdReader/FdWriter tests use) drives the genuine syscall path without a
+// read_override in place, restoring the original fd 0 afterward either way.
+test "readFd0's real POSIX path: readBytesRaw reads a line and a fixed-size chunk from actual fd 0" {
+    clearReadOverride(); // must not be masked by a leftover override from another test
+    const dup_rc = std.posix.system.dup(0);
+    try testing.expect(std.posix.errno(dup_rc) == .SUCCESS);
+    const saved_stdin: std.posix.fd_t = @intCast(dup_rc);
+    defer {
+        _ = std.posix.system.dup2(saved_stdin, 0);
+        _ = std.posix.system.close(saved_stdin);
+    }
+
+    const fds = try std.Io.Threaded.pipe2(.{});
+    defer std.Io.Threaded.closeFd(fds[1]);
+    try testing.expect(std.posix.errno(std.posix.system.dup2(fds[0], 0)) == .SUCCESS);
+    std.Io.Threaded.closeFd(fds[0]); // fd 0 now holds an equivalent duplicate
+
+    const payload = "first line\nrest";
+    _ = std.posix.system.write(fds[1], payload.ptr, payload.len);
+
+    var line_buf: [32]u8 = undefined;
+    const line_n = readBytesRaw(&line_buf, true);
+    try testing.expectEqual(@as(isize, 11), line_n);
+    try testing.expectEqualStrings("first line\n", line_buf[0..11]);
+
+    var chunk_buf: [4]u8 = undefined;
+    const chunk_n = readBytesRaw(&chunk_buf, false);
+    try testing.expectEqual(@as(isize, 4), chunk_n);
+    try testing.expectEqualStrings("rest", &chunk_buf);
+}
+
 test "fireTrace calls the hook once per distinct line and skips repeats" {
     const Rec = struct {
         var hits: u32 = 0;
@@ -769,6 +806,185 @@ test "printValue renders scalars, strings, and null through the write override" 
     try testing.expectEqualStrings("actor<2:7>", withCapture(struct {
         fn f() void {
             printValue(.{ .actor_ref = .{ .index = 2, .generation = 7 } });
+        }
+    }.f));
+}
+
+// Coverage-audit 2026-09: printValueDepth's giant switch over every .object
+// kind (used whenever a script prints a composite value, e.g. std.io.println
+// on an array/map/struct) had only ever been reached for scalar Value tags
+// (int/bool/null/error/actor_ref) in this file's own tests — every .object
+// arm was untested here. None of these Object variants need real heap
+// allocation or a VMContext to construct — they're plain Zig struct
+// literals — so they're cheap to build directly. withCapture's `run` must
+// be a plain zero-arg fn (no captures), so the object to print for each
+// case is staged through this module-level var rather than passed in.
+fn emptySpec() vmod.FieldTypeSpec {
+    return .{ .alts = &.{} };
+}
+
+fn minimalFunc() vmod.FuncObj {
+    return .{
+        .ip = 0,
+        .arity = 0,
+        .is_variadic = false,
+        .variadic_type = emptySpec(),
+        .capture_slots = &.{},
+        .param_types = &.{},
+        .has_typed_params = false,
+        .return_types = &.{},
+        .has_typed_returns = false,
+    };
+}
+
+var test_print_staged: Value = .null;
+fn printStaged() void {
+    printValue(test_print_staged);
+}
+fn captureObj(obj: *vmod.Object) []const u8 {
+    test_print_staged = .{ .object = obj };
+    return withCapture(printStaged);
+}
+
+test "printValue renders every .object kind" {
+    var struct_type_obj: vmod.Object = .{ .struct_type = .{ .name = "Point", .qualified_name = "@m:Point", .fields = &.{} } };
+    try testing.expectEqualStrings("<struct Point>", captureObj(&struct_type_obj));
+
+    var interface_type_obj: vmod.Object = .{ .interface_type = .{ .name = "Shaped", .qualified_name = "@m:Shaped", .methods = &.{} } };
+    try testing.expectEqualStrings("<interface Shaped>", captureObj(&interface_type_obj));
+
+    var named_type_obj: vmod.Object = .{ .named_type = .{ .name = "Meters", .qualified_name = "@m:Meters", .base = .float } };
+    try testing.expectEqualStrings("<type Meters>", captureObj(&named_type_obj));
+
+    var enum_type_obj: vmod.Object = .{ .enum_type = .{ .name = "Color", .qualified_name = "@m:Color", .members = &.{"red"} } };
+    try testing.expectEqualStrings("<enum Color>", captureObj(&enum_type_obj));
+
+    var variant_type_obj: vmod.Object = .{ .variant_type = .{ .name = "Shape", .qualified_name = "@m:Shape", .arms = &.{} } };
+    try testing.expectEqualStrings("<variant Shape>", captureObj(&variant_type_obj));
+
+    var named_error_type_obj: vmod.Object = .{ .named_error_type = .{ .name = "MyErr" } };
+    try testing.expectEqualStrings("<error type MyErr>", captureObj(&named_error_type_obj));
+
+    var func_obj: vmod.Object = .{ .function = minimalFunc() };
+    try testing.expectEqualStrings("<func>", captureObj(&func_obj));
+
+    var task_behavior_obj: vmod.Object = .{ .function = minimalFunc() };
+    var task_type_obj: vmod.Object = .{ .task_type = .{ .name = "Worker", .qualified_name = "@m:Worker", .behavior = &task_behavior_obj } };
+    try testing.expectEqualStrings("<task Worker>", captureObj(&task_type_obj));
+
+    var closure_obj: vmod.Object = .{ .closure = .{ .func = &func_obj, .upvalues = &.{} } };
+    try testing.expectEqualStrings("<closure>", captureObj(&closure_obj));
+
+    var cell_obj: vmod.Object = .{ .cell = .{ .value = .{ .int = 1 } } };
+    try testing.expectEqualStrings("<cell>", captureObj(&cell_obj));
+
+    var native_func_obj: vmod.Object = .{ .native_function = .{ .id = 0, .arity = 0 } };
+    try testing.expectEqualStrings("<native-func>", captureObj(&native_func_obj));
+
+    var host_func_obj: vmod.Object = .{ .host_module_function = .{ .call_id = 0, .arity = 0 } };
+    try testing.expectEqualStrings("<host-func>", captureObj(&host_func_obj));
+
+    var iterator_obj: vmod.Object = .{ .iterator = .{ .kind = .array, .index = 0 } };
+    try testing.expectEqualStrings("<iter>", captureObj(&iterator_obj));
+
+    var string_builder_obj: vmod.Object = .{ .string_builder = .{ .buf = &.{}, .len = 0 } };
+    try testing.expectEqualStrings("<builder>", captureObj(&string_builder_obj));
+
+    var named_type_fn_obj: vmod.Object = .{ .named_type_fn = .{ .typ = &named_type_obj, .kind = .succ } };
+    try testing.expectEqualStrings("<func>", captureObj(&named_type_fn_obj));
+
+    var enum_type_fn_obj: vmod.Object = .{ .enum_type_fn = .{ .typ = &enum_type_obj, .kind = .from_int } };
+    try testing.expectEqualStrings("<func>", captureObj(&enum_type_fn_obj));
+
+    var enum_value_obj: vmod.Object = .{ .enum_value = .{ .typ = &enum_type_obj, .name = "red", .ordinal = 0 } };
+    try testing.expectEqualStrings("red", captureObj(&enum_value_obj));
+
+    var named_value_obj: vmod.Object = .{ .named_value = .{ .typ = &named_type_obj, .value = .{ .int = 42 } } };
+    try testing.expectEqualStrings("42", captureObj(&named_value_obj));
+
+    var variant_ctor_obj: vmod.Object = .{ .variant_ctor = .{ .typ = &variant_type_obj, .tag = "point", .ordinal = 0, .payload_type = null } };
+    try testing.expectEqualStrings("Shape.point", captureObj(&variant_ctor_obj));
+
+    var variant_value_obj: vmod.Object = .{ .variant_value = .{ .typ = &variant_type_obj, .tag = "point", .ordinal = 0, .payload = .null } };
+    try testing.expectEqualStrings("Shape.point", captureObj(&variant_value_obj));
+
+    var variant_payload_value_obj: vmod.Object = .{ .variant_value = .{ .typ = &variant_type_obj, .tag = "tag", .ordinal = 1, .payload = .{ .int = 7 } } };
+    try testing.expectEqualStrings("Shape.tag(7)", captureObj(&variant_payload_value_obj));
+
+    var arm_fields = [_]Value{ .{ .int = 1 }, .{ .int = 2 } };
+    var variant_arm_fields_obj: vmod.Object = .{ .variant_value = .{ .typ = &variant_type_obj, .tag = "pair", .ordinal = 2, .payload = .null, .arm_fields = &arm_fields } };
+    try testing.expectEqualStrings("Shape.pair(1, 2)", captureObj(&variant_arm_fields_obj));
+
+    var named_error_value_obj: vmod.Object = .{ .named_error_value = .{ .typ = &named_error_type_obj, .msg = &.{ .bytes = "boom" } } };
+    try testing.expectEqualStrings("MyErr(boom)", captureObj(&named_error_value_obj));
+
+    // .map/.map_managed: string keys print bare; a non-string key (the
+    // struct_instance/map else-branch below) recurses through
+    // printValueDepth instead.
+    var map_entries = [_]vmod.MapEntry{.{ .key = .{ .string = &.{ .bytes = "k" } }, .value = .{ .int = 9 } }};
+    var map_obj: vmod.Object = .{ .map = &map_entries };
+    try testing.expectEqualStrings("{k: 9}", captureObj(&map_obj));
+
+    var map_managed_obj: vmod.Object = .{ .map_managed = &map_entries };
+    try testing.expectEqualStrings("{k: 9}", captureObj(&map_managed_obj));
+
+    var int_key_entries = [_]vmod.MapEntry{.{ .key = .{ .int = 5 }, .value = .{ .int = 9 } }};
+    var int_key_map_obj: vmod.Object = .{ .map = &int_key_entries };
+    try testing.expectEqualStrings("{5: 9}", captureObj(&int_key_map_obj));
+
+    var hashed_buckets = [_]i32{ 0, -1 };
+    var map_hashed_obj: vmod.Object = .{ .map_hashed = .{ .entries = &map_entries, .len = 1, .buckets = &hashed_buckets } };
+    try testing.expectEqualStrings("{k: 9}", captureObj(&map_hashed_obj));
+
+    // struct_instance (heap-backed, >4 fields) and small_struct_instance
+    // (inline, <=4 fields) are two separate representations with their own
+    // rendering code; struct_instance's field list also uses the same
+    // string/else key-printing split as .map above, so a non-string key
+    // (structurally never produced by real struct construction, but the
+    // renderer handles it defensively the same way .map does) exercises
+    // the same "else" branch here too.
+    var struct_fields = [_]vmod.MapEntry{
+        .{ .key = .{ .string = &.{ .bytes = "x" } }, .value = .{ .int = 1 } },
+        .{ .key = .{ .int = 99 }, .value = .{ .int = 2 } },
+    };
+    var struct_instance_obj: vmod.Object = .{ .struct_instance = .{ .typ = &struct_type_obj, .fields = &struct_fields } };
+    try testing.expectEqualStrings("Point{x: 1, 99: 2}", captureObj(&struct_instance_obj));
+
+    var small_struct_obj: vmod.Object = .{ .small_struct_instance = .{
+        .typ = &struct_type_obj,
+        .count = 0,
+        .v = .{ .null, .null, .null, .null },
+    } };
+    try testing.expectEqualStrings("Point{}", captureObj(&small_struct_obj));
+}
+
+// Coverage-audit 2026-09: printValueDepth's own recursion-depth guard
+// (PrintMaxDepth = 64) has no test — building 64 real nested arrays would
+// work but is needlessly indirect; printValueDepth is a private fn in this
+// same file, so it can be called directly at the guard's boundary depth.
+test "printValueDepth stops recursing and emits '...' at PrintMaxDepth" {
+    try testing.expectEqualStrings("...", withCapture(struct {
+        fn f() void {
+            var a: [PrintMaxDepth]*const vmod.Object = undefined;
+            var c: usize = 0;
+            printValueDepth(.{ .int = 1 }, PrintMaxDepth, &a, &c);
+        }
+    }.f));
+}
+
+// Coverage-audit 2026-09: writeF64Prec's frac_mod-overflow guard is the
+// sibling of the already-tested integer-part overflow, but needs the
+// *fractional* scaled value to exceed u64 range — only reachable at a
+// precision high enough that scale (10^prec) itself exceeds 2^64, i.e.
+// prec >= 20.
+test "writeF64Prec emits '?' when the requested precision overflows u64" {
+    // frac_mod ~= (fractional part of v) * 10^prec must exceed 2^64
+    // (~1.8e19); at prec=20 (scale=1e20) that needs a fractional part
+    // over ~0.185, which 3.14159's ~0.14159 narrowly misses — 3.5's 0.5
+    // clears it comfortably.
+    try testing.expectEqualStrings("?", withCapture(struct {
+        fn f() void {
+            writeF64Prec(3.5, 20);
         }
     }.f));
 }

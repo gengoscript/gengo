@@ -416,7 +416,16 @@ fn httpExchange(
         } else if (std.ascii.eqlIgnoreCase(name, "transfer-encoding")) {
             if (std.mem.indexOf(u8, value, "chunked") != null) transfer_chunked = true;
         } else if (std.ascii.eqlIgnoreCase(name, "content-encoding")) {
-            if (std.mem.eql(u8, value, "gzip")) content_encoding = .gzip;
+            // "deflate" was never recognized here, leaving content_encoding
+            // at .identity — the .deflate case in the decompression switch
+            // below was completely unreachable dead code, silently handing
+            // scripts the raw zlib-compressed bytes as if they were the
+            // real body whenever a server sent Content-Encoding: deflate.
+            if (std.mem.eql(u8, value, "gzip")) {
+                content_encoding = .gzip;
+            } else if (std.mem.eql(u8, value, "deflate")) {
+                content_encoding = .deflate;
+            }
         }
     }
 
@@ -712,4 +721,131 @@ test "httpExchange rejects a CRLF that only appears after percent-decoding the U
     var resp_reader = std.Io.Reader.fixed("");
 
     try testing.expectError(error.InvalidRequest, httpExchange("GET", uri, "example.com", null, null, &resp_reader, &req_alloc.writer));
+}
+
+// Coverage-audit 2026-09: every httpExchange test above passes `null` for
+// both maybe_body and maybe_headers, so the request-building side's own
+// header-writing loop and body-writing call had never run — only the
+// response-parsing half's headers were ever exercised.
+test "httpExchange writes request headers and a request body" {
+    const uri = try std.Uri.parse("http://example.com/");
+    var req_alloc = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer req_alloc.deinit();
+    var resp_reader = std.Io.Reader.fixed("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+
+    var headers = std.StringHashMap([]const u8).init(testing.allocator);
+    defer headers.deinit();
+    try headers.put("X-Custom", "value1");
+
+    var result = try httpExchange("POST", uri, "example.com", "payload", headers, &resp_reader, &req_alloc.writer);
+    defer result.deinit();
+
+    try testing.expectEqualStrings("ok", result.body);
+    const written = req_alloc.written();
+    try testing.expect(std.mem.indexOf(u8, written, "X-Custom: value1\r\n") != null);
+    try testing.expect(std.mem.indexOf(u8, written, "Content-Length: 7\r\n") != null);
+    try testing.expect(std.mem.endsWith(u8, written, "payload"));
+}
+
+// Coverage-audit 2026-09: only the gzip Content-Encoding branch had ever
+// been exercised; the sibling `deflate` (zlib-wrapped) branch had not.
+test "httpExchange decompresses a deflate Content-Encoding body" {
+    const plaintext = "hello deflate world";
+
+    var flate_out_buf: [4096]u8 = undefined;
+    var flate_w: std.Io.Writer = .fixed(&flate_out_buf);
+    var deflate_buf: [std.compress.flate.max_window_len]u8 = undefined;
+    var compressor = try std.compress.flate.Compress.init(&flate_w, &deflate_buf, .zlib, .default);
+    try compressor.writer.writeAll(plaintext);
+    try compressor.finish();
+    const zlib_bytes = flate_w.buffered();
+
+    var response: std.ArrayList(u8) = .empty;
+    defer response.deinit(testing.allocator);
+    const header = try std.fmt.allocPrint(
+        testing.allocator,
+        "HTTP/1.1 200 OK\r\ncontent-encoding: deflate\r\nContent-Length: {d}\r\n\r\n",
+        .{zlib_bytes.len},
+    );
+    defer testing.allocator.free(header);
+    try response.appendSlice(testing.allocator, header);
+    try response.appendSlice(testing.allocator, zlib_bytes);
+
+    const uri = try std.Uri.parse("http://example.com/");
+    var req_alloc = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer req_alloc.deinit();
+    var resp_reader = std.Io.Reader.fixed(response.items);
+
+    var result = try httpExchange("GET", uri, "example.com", null, null, &resp_reader, &req_alloc.writer);
+    defer result.deinit();
+
+    try testing.expectEqualStrings(plaintext, result.body);
+    try testing.expectEqualStrings("identity", result.headers.get("content-encoding").?);
+}
+
+// Coverage-audit 2026-09: httpFetchBuiltin (the real socket-connecting
+// client used whenever no host handler is registered) had zero native test
+// coverage — every existing cap:http test in compiler_test.zig registers a
+// fake host handler, which takes an entirely different code path
+// (httpFetchHost). This drives the actual URL-parse/TCP-connect/request-
+// write/response-read path end to end against a real loopback listener, the
+// same raw-POSIX-socket technique net_state.zig's own dial tests use (a
+// plain http:// URL so no TLS handshake is involved).
+test "httpFetch performs a real loopback HTTP request when no host handler is registered" {
+    // g_state's handler is threadlocal, process-lifetime state shared by
+    // every test in this binary — don't assume another test left it unset.
+    resetHandler();
+    defer resetHandler();
+
+    const listen_sock = std.posix.system.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
+    try testing.expect(std.posix.errno(listen_sock) == .SUCCESS);
+    const listen_fd: std.posix.socket_t = @intCast(listen_sock);
+    defer _ = std.posix.system.close(listen_fd);
+
+    var addr_storage: std.posix.sockaddr.storage = std.mem.zeroes(std.posix.sockaddr.storage);
+    const sa: *std.posix.sockaddr.in = @ptrCast(&addr_storage);
+    sa.family = std.posix.AF.INET;
+    sa.port = 0;
+    sa.addr = @bitCast([4]u8{ 127, 0, 0, 1 });
+    try testing.expect(std.posix.errno(std.posix.system.bind(listen_fd, @ptrCast(&addr_storage), @sizeOf(std.posix.sockaddr.in))) == .SUCCESS);
+    try testing.expect(std.posix.errno(std.posix.system.listen(listen_fd, 1)) == .SUCCESS);
+
+    var actual_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.storage);
+    try testing.expect(std.posix.errno(std.posix.system.getsockname(listen_fd, @ptrCast(&addr_storage), &actual_len)) == .SUCCESS);
+    const port = std.mem.bigToNative(u16, sa.port);
+
+    const Worker = struct {
+        fn run(fd: std.posix.socket_t) void {
+            const crc = std.posix.system.accept(fd, null, null);
+            if (std.posix.errno(crc) != .SUCCESS) return;
+            const conn: std.posix.socket_t = @intCast(crc);
+            defer _ = std.posix.system.close(conn);
+            // Drain the request up to the blank line terminating headers —
+            // proves the real client actually wrote a well-formed request,
+            // not just that some bytes arrived.
+            var buf: [4096]u8 = undefined;
+            var total: usize = 0;
+            while (total < buf.len) {
+                const n = std.posix.read(conn, buf[total..]) catch return;
+                if (n == 0) return;
+                total += n;
+                if (std.mem.indexOf(u8, buf[0..total], "\r\n\r\n") != null) break;
+            }
+            if (!std.mem.startsWith(u8, buf[0..total], "GET / HTTP/1.1\r\n")) return;
+            const resp = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+            _ = std.posix.system.write(conn, resp.ptr, resp.len);
+        }
+    };
+    const thread = try std.Thread.spawn(.{}, Worker.run, .{listen_fd});
+    defer thread.join();
+
+    var url_buf: [64]u8 = undefined;
+    const url = try std.fmt.bufPrint(&url_buf, "http://127.0.0.1:{d}/", .{port});
+
+    var result = try httpFetch("GET", url, null, null, 0);
+    defer result.deinit();
+
+    try testing.expectEqual(@as(i32, 200), result.status);
+    try testing.expect(result.ok);
+    try testing.expectEqualStrings("hello", result.body);
 }

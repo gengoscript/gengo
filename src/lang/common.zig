@@ -225,3 +225,36 @@ pub fn isDigit(c: u8) bool {
 pub fn isAlphaNum(c: u8) bool {
     return isAlpha(c) or isDigit(c);
 }
+
+const testing = std.testing;
+
+// Coverage-audit 2026-09: the compiler pipeline never actually calls
+// parseFloat/parseInt with a leading '-' — the lexer emits numeric tokens
+// unsigned, and the compiler applies unary minus as a separate AST/bytecode
+// step (see compiler_expr.zig's callers) — so the `neg` branch in both
+// functions, and parseFloat's octal branch specifically (parseInt's octal
+// branch is reached through int-typed octal literals; nothing in the
+// compiler currently drives a *float*-context octal literal through
+// parseFloat), had never run. Both functions are plain pure exports with a
+// documented "-", "0x", "0b", "0o" contract, so they're worth proving
+// directly regardless of what today's callers happen to pass.
+test "parseFloat handles a leading '-' across decimal, hex, binary, and octal forms" {
+    try testing.expectEqual(@as(?f64, -3.5), parseFloat("-3.5"));
+    try testing.expectEqual(@as(?f64, -255.0), parseFloat("-0xFF"));
+    try testing.expectEqual(@as(?f64, -5.0), parseFloat("-0b101"));
+    try testing.expectEqual(@as(?f64, -15.0), parseFloat("-0o17"));
+}
+
+test "parseFloat parses an octal literal (0o.../0O...) directly, including underscores" {
+    try testing.expectEqual(@as(?f64, 15.0), parseFloat("0o17"));
+    try testing.expectEqual(@as(?f64, 15.0), parseFloat("0O1_7"));
+    try testing.expectEqual(@as(?f64, null), parseFloat("0o8"));
+    try testing.expectEqual(@as(?f64, null), parseFloat("0o"));
+}
+
+test "parseInt handles a leading '-' across decimal, hex, binary, and octal forms" {
+    try testing.expectEqual(@as(?i64, -42), parseInt("-42"));
+    try testing.expectEqual(@as(?i64, -255), parseInt("-0xFF"));
+    try testing.expectEqual(@as(?i64, -5), parseInt("-0b101"));
+    try testing.expectEqual(@as(?i64, -15), parseInt("-0o17"));
+}
