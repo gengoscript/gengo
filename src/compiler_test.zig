@@ -8085,20 +8085,26 @@ test "cap:net listen/accept: real POSIX bind+accept+read+write roundtrip" {
     var echoed = std.atomic.Value(bool).init(false);
     const client = try std.Thread.spawn(.{}, netListenClientWorker, .{ port, &connected, &echoed });
 
-    var src_buf: [512]u8 = undefined;
+    var src_buf: [768]u8 = undefined;
     const src = try std.fmt.bufPrint(&src_buf,
         \\net := import("cap:net")
         \\func serve() string {{
         \\    l, err := net.listen("tcp", "127.0.0.1:{d}")
         \\    if err != null {{ return "listen error" }}
+        \\    addr := l.local_addr()
         \\    l.set_accept_deadline(3000)
         \\    conn, aerr := l.accept()
         \\    if aerr != null {{ return "accept error" }}
         \\    data := conn.read(64)
         \\    conn.write("pong:" + data)
         \\    conn.close()
+        \\    // Reading/writing a now-closed connection drives cap_net.zig's
+        \\    // read/write error-mapping branches (pushCatchableNetError) —
+        \\    // the results are discarded, only the dispatch path matters.
+        \\    discarded_read := conn.read(1)
+        \\    discarded_write := conn.write("x")
         \\    l.close()
-        \\    return "ok"
+        \\    return "ok:" + addr
         \\}}
     , .{port});
 
@@ -8107,13 +8113,70 @@ test "cap:net listen/accept: real POSIX bind+accept+read+write roundtrip" {
         else => return error.CompileFailed,
     }
     switch (rt.call("serve", &.{})) {
-        .ok => |v| try std.testing.expectEqualStrings("ok", try vms.asStringValue(v)),
+        .ok => |v| {
+            const result = try vms.asStringValue(v);
+            try std.testing.expect(std.mem.startsWith(u8, result, "ok:"));
+            var port_buf: [8]u8 = undefined;
+            const port_str = try std.fmt.bufPrint(&port_buf, ":{d}", .{port});
+            try std.testing.expect(std.mem.endsWith(u8, result, port_str));
+        },
         .runtime_error => return error.UnexpectedRuntimeError,
     }
 
     client.join();
     try std.testing.expect(connected.load(.seq_cst));
     try std.testing.expect(echoed.load(.seq_cst));
+}
+
+// Coverage-audit 2026-09: cap_net.zig's `.cap_net_listen` dispatch arm's own
+// `net_state.netListen(...) catch { pushErrPairMsg(ctx, lastNetErr()); ... }`
+// branch was untested — every existing listen()-failure test above stops at
+// the scope/policy pre-checks (net.listen not granted / policy refused),
+// never reaching net_state.netListen itself. Binding a raw socket to the
+// port first forces a real EADDRINUSE out of the underlying POSIX bind(2)
+// call net_state.netListen makes.
+test "cap:net listen surfaces a real bind failure (port already in use) through pushErrPairMsg" {
+    net_state.clearListenPolicyRules();
+    _ = net_state.addListenPolicyRule(.allow, "*", 0);
+    defer net_state.clearListenPolicyRules();
+
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .capabilities = &.{ "net", "net.listen" },
+        .allocator = std.testing.allocator,
+    });
+    defer rt.deinit();
+
+    const port: u16 = 18454;
+    const sock = std.posix.system.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
+    try std.testing.expect(std.posix.errno(sock) == .SUCCESS);
+    const fd: std.posix.socket_t = @intCast(sock);
+    defer _ = std.posix.system.close(fd);
+    var addr_storage: std.posix.sockaddr.storage = std.mem.zeroes(std.posix.sockaddr.storage);
+    const sa: *std.posix.sockaddr.in = @ptrCast(&addr_storage);
+    sa.family = std.posix.AF.INET;
+    sa.port = std.mem.nativeToBig(u16, port);
+    sa.addr = @bitCast([4]u8{ 127, 0, 0, 1 });
+    try std.testing.expect(std.posix.errno(std.posix.system.bind(fd, @ptrCast(&addr_storage), @sizeOf(std.posix.sockaddr.in))) == .SUCCESS);
+    try std.testing.expect(std.posix.errno(std.posix.system.listen(fd, 1)) == .SUCCESS);
+
+    var src_buf: [256]u8 = undefined;
+    const src = try std.fmt.bufPrint(&src_buf,
+        \\net := import("cap:net")
+        \\func serve() bool {{
+        \\    l, err := net.listen("tcp", "127.0.0.1:{d}")
+        \\    return err != null
+        \\}}
+    , .{port});
+
+    switch (rt.run(src)) {
+        .ok => {},
+        else => return error.CompileFailed,
+    }
+    switch (rt.call("serve", &.{})) {
+        .ok => |v| try std.testing.expect(v.boolean),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
 }
 
 // cap_fs.zig's dispatch functions (unlike cap:net/cap:http) return a single
@@ -8551,12 +8614,18 @@ test "cap:http fetch rejects malformed options before any dispatch to httpFetch"
         \\func badTimeout() { r, e := http.fetch("http://x.invalid/", {"timeout_ms": "nope"}) }
         \\func badHeaders() { r, e := http.fetch("http://x.invalid/", {"headers": 123}) }
         \\func badOpts() { r, e := http.fetch("http://x.invalid/", 123) }
+        \\func nonMapOpts() { r, e := http.fetch("http://x.invalid/", [1, 2, 3]) }
     )) {
         .ok => {},
         else => return error.CompileFailed,
     }
 
-    const names = [_][]const u8{ "badMethod", "badBody", "badTimeout", "badHeaders", "badOpts" };
+    // badOpts (a bare int) trips the *outer* `arg1 switch (.object => ...,
+    // else => TypeError)` guard; nonMapOpts (an array, which is a real
+    // .object) instead reaches the inner `opts.* switch (.map/.map_managed/
+    // .map_hashed => ..., else => TypeError)` — a distinct branch nothing
+    // above exercises.
+    const names = [_][]const u8{ "badMethod", "badBody", "badTimeout", "badHeaders", "badOpts", "nonMapOpts" };
     for (names) |name| {
         switch (rt.call(name, &.{})) {
             .runtime_error => |e| try std.testing.expectEqual(error.TypeError, e.kind),
@@ -8637,6 +8706,11 @@ test "cap:http get/post/fetch build a full Response struct through a fake host h
         \\    if err != null { return "ERR" }
         \\    return r.headers["x-resp"]
         \\}
+        \\func doFetchBodyAndTimeout() int {
+        \\    r, err := http.fetch("http://x.invalid/", {"method": "POST", "body": "abc", "timeout_ms": 5.0})
+        \\    if err != null { return -1 }
+        \\    return r.status
+        \\}
     )) {
         .ok => {},
         else => return error.CompileFailed,
@@ -8679,6 +8753,18 @@ test "cap:http get/post/fetch build a full Response struct through a fake host h
     }
     try std.testing.expectEqualStrings("PUT", state.seen_method[0..state.seen_method_len]);
     try std.testing.expectEqual(@as(c_int, 1), state.seen_header_count);
+
+    // Exercises the "body" option's success path (only its TypeError arm
+    // was covered above) and timeout_ms given as a *float* (5.0) — the
+    // "int" arm was implicitly reachable via any successful fetch, but
+    // nothing before this drove a float through the range-checked
+    // float-to-i64 conversion.
+    switch (rt.call("doFetchBodyAndTimeout", &.{})) {
+        .ok => |v| try std.testing.expectEqual(@as(i64, 201), v.int),
+        .runtime_error => return error.UnexpectedRuntimeError,
+    }
+    try std.testing.expectEqualStrings("POST", state.seen_method[0..state.seen_method_len]);
+    try std.testing.expectEqual(@as(c_int, 3), state.seen_body_len); // "abc".len == 3
 }
 
 // Fake host handler for cap:net tests below, same idea as FakeCapHttpState/

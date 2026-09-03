@@ -9,6 +9,7 @@ const NativeFuncObj = @import("../value.zig").NativeFuncObj;
 const net_state = @import("net_state.zig");
 const globals = @import("../globals.zig");
 const MapEntry = @import("../value.zig").MapEntry;
+const Object = @import("../value.zig").Object;
 const chunk = @import("../chunk.zig");
 const common = @import("../common.zig");
 
@@ -356,4 +357,54 @@ pub fn dispatch(ctx: VMContext, nf: NativeFuncObj, argc: u8) !void {
         },
         else => unreachable,
     }
+}
+
+const testing = std.testing;
+
+// Coverage-audit 2026-09: extractHandle's `.float` arm was never exercised
+// — every dispatch() call site above always passes a handle struct whose
+// `_handle` field was constructed as `.{ .int = ... }` (see dialImpl/listen
+// above). extractHandle takes the whole struct-instance `Value` (not the
+// handle scalar directly) and reads `fields[0].value`, so a fake struct
+// instance is needed to drive the field through as a float. `.typ` is never
+// dereferenced by extractHandle, so a throwaway struct_type object is
+// enough to satisfy the pointer.
+test "extractHandle accepts an in-range float, rejects NaN/negative/overflow/non-numeric" {
+    var dummy_type: Object = .{ .struct_type = .{ .name = "T", .qualified_name = "T", .fields = &.{} } };
+
+    var f1 = [_]MapEntry{.{ .key = .null, .value = .{ .float = 42.0 } }};
+    var o1: Object = .{ .struct_instance = .{ .typ = &dummy_type, .fields = &f1 } };
+    try testing.expectEqual(@as(u32, 42), try extractHandle(.{ .object = &o1 }));
+
+    var f2 = [_]MapEntry{.{ .key = .null, .value = .{ .float = std.math.nan(f64) } }};
+    var o2: Object = .{ .struct_instance = .{ .typ = &dummy_type, .fields = &f2 } };
+    try testing.expectError(error.TypeError, extractHandle(.{ .object = &o2 }));
+
+    var f3 = [_]MapEntry{.{ .key = .null, .value = .{ .float = -1.0 } }};
+    var o3: Object = .{ .struct_instance = .{ .typ = &dummy_type, .fields = &f3 } };
+    try testing.expectError(error.TypeError, extractHandle(.{ .object = &o3 }));
+
+    var f4 = [_]MapEntry{.{ .key = .null, .value = .{ .float = 1e20 } }};
+    var o4: Object = .{ .struct_instance = .{ .typ = &dummy_type, .fields = &f4 } };
+    try testing.expectError(error.TypeError, extractHandle(.{ .object = &o4 }));
+
+    var f5 = [_]MapEntry{.{ .key = .null, .value = .{ .boolean = true } }};
+    var o5: Object = .{ .struct_instance = .{ .typ = &dummy_type, .fields = &f5 } };
+    try testing.expectError(error.TypeError, extractHandle(.{ .object = &o5 }));
+
+    try testing.expectError(error.TypeError, extractHandle(.{ .boolean = true }));
+}
+
+test "extractUsize accepts an in-range float, rejects NaN/negative/overflow/non-numeric" {
+    try testing.expectEqual(@as(usize, 4096), try extractUsize(.{ .float = 4096.0 }));
+    try testing.expectError(error.TypeError, extractUsize(.{ .float = std.math.nan(f64) }));
+    try testing.expectError(error.TypeError, extractUsize(.{ .float = -1.0 }));
+    try testing.expectError(error.TypeError, extractUsize(.{ .float = 1e30 }));
+    try testing.expectError(error.TypeError, extractUsize(.{ .boolean = true }));
+}
+
+test "extractI64 truncates a float via safeI64FromFloat, rejects NaN and non-numeric" {
+    try testing.expectEqual(@as(i64, 3), try extractI64(.{ .float = 3.9 }));
+    try testing.expectError(error.TypeError, extractI64(.{ .float = std.math.nan(f64) }));
+    try testing.expectError(error.TypeError, extractI64(.{ .string = &.{ .bytes = "nope" } }));
 }
