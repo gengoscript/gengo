@@ -10393,6 +10393,28 @@ test "compiler: int_div's named-type carrier path also raises RangeError for i64
     try std.testing.expectError(error.RangeError, rt.callGlobal("g", &.{}));
 }
 
+// .int_div's named-type carrier path (vm.zig, numericBinaryOp/
+// pushNumericResultWithCarrier route) has two division-by-zero checks: one
+// on the raw float divisor before truncation (`nop.bn == 0.0`, hit when the
+// divisor is an exact-zero carrier like Big(0)), and a second one after
+// truncating both operands to i64 (`bn_int == 0`, hit when the divisor is a
+// nonzero float that truncates to zero, e.g. 0.4) — confirmed as two
+// genuinely distinct reachable branches via `gengo run` before writing this.
+test "compiler: int_div's named-type carrier path raises DivisionByZero for both an exact-zero carrier and a truncates-to-zero float divisor" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Big int
+        \\func divAny(a any, b any) any { return a div b }
+        \\func exactZeroCarrier() any { return divAny(Big(5), Big(0)) }
+        \\func truncatesToZero() any { return divAny(Big(5), 0.4) }
+        \\func normal() any { return divAny(Big(7), Big(2)) }
+    );
+    try std.testing.expectError(error.DivisionByZero, rt.callGlobal("exactZeroCarrier", &.{}));
+    try std.testing.expectError(error.DivisionByZero, rt.callGlobal("truncatesToZero", &.{}));
+    try std.testing.expectEqual(@as(i64, 3), (try rt.callGlobal("normal", &.{})).int);
+}
+
 // The same copy-paste-divergence audit found .mod's plain int/int path
 // (unlike its two siblings .int_div and .rem, just above) never checked
 // for this case at all -- @mod(minInt(i64), -1) traps/UB's on the same 2^63
@@ -10406,6 +10428,28 @@ test "compiler: mod does not trap/overflow for i64::MIN mod -1" {
     );
     const result = try rt.callGlobal("g", &.{ .{ .int = std.math.minInt(i64) }, .{ .int = -1 } });
     try std.testing.expectEqual(@as(i64, 0), result.int);
+}
+
+// .rem's and .mod's shared `numericBinaryOp` fallback (reached when the
+// operands are neither both int, both bigint, nor both float -- e.g. a
+// plain int mixed with a plain float, only reachable through `any`-erasure
+// since a typed function signature would reject the mix statically) had no
+// direct test for either its success path or its zero-divisor check.
+test "compiler: rem/mod's mixed int/float fallback path computes correctly and checks for zero" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func remAny(a any, b any) any { return a rem b }
+        \\func modAny(a any, b any) any { return a mod b }
+        \\func remOk() any { return remAny(10, 3.0) }
+        \\func remZero() any { return remAny(10, 0.0) }
+        \\func modOk() any { return modAny(10, 3.0) }
+        \\func modZero() any { return modAny(10, 0.0) }
+    );
+    try std.testing.expectEqual(@as(f64, 1.0), (try rt.callGlobal("remOk", &.{})).float);
+    try std.testing.expectError(error.DivisionByZero, rt.callGlobal("remZero", &.{}));
+    try std.testing.expectEqual(@as(f64, 1.0), (try rt.callGlobal("modOk", &.{})).float);
+    try std.testing.expectError(error.DivisionByZero, rt.callGlobal("modZero", &.{}));
 }
 
 // computeAddResult (the .add opcode's non-int fallback, shared by every
@@ -12827,6 +12871,25 @@ test "compiler: ** (pow) operator covers int/int, float/float, bigint operands, 
     try std.testing.expectError(error.TypeError, rt.callGlobal("powBigIntNegExp", &.{}));
 }
 
+// The '/' operator's (Op.div) bigint branch -- reached when either operand
+// isBigInt(), converting both sides to f64 before dividing -- had no direct
+// test; only plain-int and plain-float '/' were covered. A function
+// returning `float` statically rejects a bigint operand at compile time
+// ("cannot return bigint from function returning float"), so this routes
+// through an `any`-typed helper the same way the other any-erased binop
+// tests do. Covers both operands bigint, and the divisor's own zero check.
+test "compiler: '/' (Op.div) on bigint operands divides as float and checks for zero" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func divAny(a any, b any) any { return a / b }
+        \\func bigDivBig() any { return divAny(bigint(10), bigint(4)) }
+        \\func bigDivZero() any { return divAny(bigint(10), 0) }
+    );
+    try std.testing.expectEqual(@as(f64, 2.5), (try rt.callGlobal("bigDivBig", &.{})).float);
+    try std.testing.expectError(error.DivisionByZero, rt.callGlobal("bigDivZero", &.{}));
+}
+
 // bit_and/bit_or/bit_xor/bit_not on plain (non-named) ints are only ever
 // checked for their nominal-type-preservation behavior (see "named bitwise
 // result retains and validates nominal type" above) -- no test verifies the
@@ -13106,6 +13169,32 @@ test "compiler: dot-field access on an inline (small-payload) variant stored in 
     try std.testing.expectEqual(@as(i64, 42), (try rt.callGlobal("viaLocalSmall", &.{})).int);
     try std.testing.expectEqual(@as(i64, 999999999999), (try rt.callGlobal("viaLocalBig", &.{})).int);
     try std.testing.expectEqual(@as(i64, 7), (try rt.callGlobal("viaCallResult", &.{})).int);
+}
+
+// opGetIndex's `.inline_variant` case (vm.zig): bracket-indexing (`v["key"]`,
+// as opposed to dot access `v.key`) into a small (inline-representable)
+// variant payload by its named payload field, plus the TypeError when the
+// key doesn't match the arm's payload_name.
+test "compiler: bracket-index access on an inline variant reads the named payload field and rejects a wrong key" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Result variant {
+        \\    ok(value int),
+        \\    err(msg string),
+        \\    pending
+        \\}
+        \\func readValue() int {
+        \\    r := Result.ok(42)
+        \\    return r["value"]
+        \\}
+        \\func wrongKey() int {
+        \\    r := Result.ok(42)
+        \\    return r["nope"]
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 42), (try rt.callGlobal("readValue", &.{})).int);
+    try std.testing.expectError(error.TypeError, rt.callGlobal("wrongKey", &.{}));
 }
 
 // ── compiler_stmts.zig coverage sweep (2026-08-24) ──────────────────────────
@@ -14885,6 +14974,24 @@ test "compiler: assigning into a named map-of-maps validates the inner map's val
         \\}
     );
     try std.testing.expect((try rt.callGlobal("setValid", &.{})).boolean);
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("setInvalid", &.{}));
+}
+
+// opSetField's named-map branch (vm.zig): `x.field = val` on a value whose
+// static type is a *named map* (e.g. `type Scores map[string]Score`) is dot
+// sugar for `x["field"] = val` (compiles to `set_field`, confirmed via
+// `gengo disasm`) and must run the same val_spec validation as the bracket
+// form above, including the nested named scalar's predicate check.
+test "compiler: dot-assign into a named map validates the value against the map's val_spec predicate" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Score int predicate func(x) { return x >= 0 and x <= 100 }
+        \\type Scores map[string]Score
+        \\func setValid() int { var m Scores = {}; m.alice = 50; return m.alice }
+        \\func setInvalid() int { var m Scores = {}; m.alice = 200; return m.alice }
+    );
+    try std.testing.expectEqual(@as(i64, 50), (try rt.callGlobal("setValid", &.{})).int);
     try std.testing.expectError(error.PredicateFailed, rt.callGlobal("setInvalid", &.{}));
 }
 
@@ -18390,4 +18497,40 @@ test "compiler: a func-type annotation with more than MaxLocals parenthesized re
     try src.appendSlice(std.testing.allocator, ") }\n");
     const r = compileAndInspect(&rt, src.items);
     try std.testing.expectEqual(error.TooManyParams, r.err);
+}
+
+// namedTypeCarrier's (vm.zig) subtype/common-ancestor resolution -- used by
+// wrapValueWithCarrier and (for strings, via `+`) pushStringResultWithCarrier
+// directly -- has 4 branches, each reached by a genuinely different named-
+// type relationship: exact match (already covered elsewhere), sub+parent,
+// parent+sub, and two siblings sharing a common ancestor. A fourth case (no
+// relation at all) raises TypeError. This can only be exercised with a
+// *string*-based named type: constructNamedType (vm_types.zig) documents
+// that scalar named types (int/float/rune/bool) are deliberately erased back
+// to a bare unwrapped Value on construction ("Scalar named types ... are
+// erased: return the bare value"), so an int-based subtype/ancestor pair
+// never reaches this resolver at all -- confirmed by probing with
+// std.debug.print before finding that comment, after named-int arithmetic
+// unexpectedly kept coming back unwrapped. Strings (and decimal) stay boxed,
+// so they're the only way to reach this code natively.
+test "compiler: namedTypeCarrier resolves sub+parent, parent+sub, and sibling-common-ancestor named string types; rejects unrelated ones" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Name string
+        \\subtype ShortName Name
+        \\type Label string
+        \\subtype TagA Label
+        \\subtype TagB Label
+        \\type Other string
+        \\func addAny(a any, b any) any { return a + b }
+        \\func subParent() any { return addAny(ShortName("x"), Name("y")) }
+        \\func parentSub() any { return addAny(Name("x"), ShortName("y")) }
+        \\func siblingCommon() any { return addAny(TagA("x"), TagB("y")) }
+        \\func unrelated() any { return addAny(Name("x"), Other("y")) }
+    );
+    try std.testing.expectEqualStrings("xy", try vms.asStringValue(try rt.callGlobal("subParent", &.{})));
+    try std.testing.expectEqualStrings("xy", try vms.asStringValue(try rt.callGlobal("parentSub", &.{})));
+    try std.testing.expectEqualStrings("xy", try vms.asStringValue(try rt.callGlobal("siblingCommon", &.{})));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("unrelated", &.{}));
 }
