@@ -18534,3 +18534,206 @@ test "compiler: namedTypeCarrier resolves sub+parent, parent+sub, and sibling-co
     try std.testing.expectEqualStrings("xy", try vms.asStringValue(try rt.callGlobal("siblingCommon", &.{})));
     try std.testing.expectError(error.TypeError, rt.callGlobal("unrelated", &.{}));
 }
+
+// namedTypeCommonAncestor's while loop only had single-iteration coverage
+// (the sibling-common-ancestor test above finds the ancestor on its very
+// first check). A 3-level hierarchy where `a` is a sibling of `b`'s PARENT
+// (not of `b` itself) forces the loop to walk past b's immediate parent
+// before finding the shared grandparent, exercising the loop's back-edge.
+test "compiler: namedTypeCommonAncestor walks past a non-matching first ancestor to find a deeper common one" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Grandparent string
+        \\subtype Parent Grandparent
+        \\subtype B Parent
+        \\subtype A Grandparent
+        \\func addAny(a any, b any) any { return a + b }
+        \\func f() any { return addAny(A("x"), B("y")) }
+    );
+    try std.testing.expectEqualStrings("xy", try vms.asStringValue(try rt.callGlobal("f", &.{})));
+}
+
+// panicMessageFromValue (vm.zig) formats `assert cond, msg` panic messages
+// for every Value kind msg could be; only the int/string arms had a test.
+test "compiler: assert's message argument formats a bool or float value, not just int/string" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func withBool() { assert false, true }
+        \\func withFloat() { assert false, 3.5 }
+    );
+    try std.testing.expectError(error.AssertionFailed, rt.callGlobal("withBool", &.{}));
+    try std.testing.expectEqualStrings("true", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
+    try std.testing.expectError(error.AssertionFailed, rt.callGlobal("withFloat", &.{}));
+    try std.testing.expectEqualStrings("3.5", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
+}
+
+// compareNumericPair's SECOND non-finite check (vm.zig ~211-213) is reached
+// when the operands are a plain int mixed with a plain float (not caught by
+// either same-type fast path above it, since a==.int/b==.int and
+// a==.float/b==.float both require BOTH sides to match) -- only possible
+// through `any`-erasure, since a typed comparison would reject the mix
+// statically. checkNamedValueCompatibility's mixed named/plain branch
+// (vm.zig ~257-271) needs a genuinely *boxed* named value (string, since
+// named ints/floats erase to bare values on construction -- see this
+// session's round-8 finding) compared against null and against a plain
+// unrelated value, each producing a distinct message.
+test "compiler: comparing plain int to NaN float raises TypeError; comparing a named string to null/a plain string does too" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Name string
+        \\func ltAny(a any, b any) any { return a < b }
+        \\func intVsNan() any { return ltAny(5, std.math.nan()) }
+        \\func namedVsNull() any { return ltAny(Name("x"), null) }
+        \\func namedVsPlain() any { return ltAny(Name("x"), "y") }
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("intVsNan", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("namedVsNull", &.{}));
+    try std.testing.expectError(error.TypeError, rt.callGlobal("namedVsPlain", &.{}));
+}
+
+// performCall's .variant_ctor case (calling a variant constructor through a
+// value, not a direct `Type.arm(...)` call -- e.g. passing the constructor
+// itself as a first-class function argument) checks the payload against the
+// arm's declared payload_type; only the success path had a test.
+test "compiler: calling a variant constructor as a first-class value raises TypeError on a payload type mismatch" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Result variant { ok(value int), err(msg string) }
+        \\func ctorAny(f any, x any) any { return f(x) }
+        \\func f() any { return ctorAny(Result.ok, "wrong") }
+    );
+    try std.testing.expectError(error.TypeError, rt.callGlobal("f", &.{}));
+}
+
+// opSetIndex's .struct_instance/.small_struct_instance cases (bracket-style
+// field assignment, `s["field"] = val`, as opposed to dot assignment) had no
+// test for either struct representation (heap-backed >4-field vs. inline
+// <=4-field).
+test "compiler: bracket-index field assignment works on both small and heap-backed struct representations" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Small struct { x int, y int }
+        \\type Big struct { a int, b int, c int, d int, e int }
+        \\func viaSmall() int {
+        \\    s := Small{x: 1, y: 2}
+        \\    s["x"] = 10
+        \\    return s.x
+        \\}
+        \\func viaBig() int {
+        \\    b := Big{a: 1, b: 2, c: 3, d: 4, e: 5}
+        \\    b["a"] = 100
+        \\    return b.a
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 10), (try rt.callGlobal("viaSmall", &.{})).int);
+    try std.testing.expectEqual(@as(i64, 100), (try rt.callGlobal("viaBig", &.{})).int);
+}
+
+// .int_div's plain-float branch (`div` between two literal floats -- floor
+// division, no erasure needed) and its carrier-path fallback (reached when
+// operands are mixed int+float, e.g. via `any`-erasure since a typed
+// operator would reject the mix statically) each have their own independent
+// division-by-zero check plus a success path; none had a direct test.
+test "compiler: int_div's plain-float and mixed-int/float carrier paths compute correctly and check for zero" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func floatOk() float { return 5.0 div 2.0 }
+        \\func floatZero() float { return 5.0 div 0.0 }
+        \\func divAny(a any, b any) any { return a div b }
+        \\func carrierOk() any { return divAny(7, 2.0) }
+        \\func carrierExactZero() any { return divAny(5, 0.0) }
+        \\func carrierOverflow() any { return divAny(-9223372036854775807 - 1, -1.0) }
+    );
+    try std.testing.expectEqual(@as(f64, 2.0), (try rt.callGlobal("floatOk", &.{})).float);
+    try std.testing.expectError(error.DivisionByZero, rt.callGlobal("floatZero", &.{}));
+    try std.testing.expectEqual(@as(f64, 3.0), (try rt.callGlobal("carrierOk", &.{})).float);
+    try std.testing.expectError(error.DivisionByZero, rt.callGlobal("carrierExactZero", &.{}));
+    try std.testing.expectError(error.RangeError, rt.callGlobal("carrierOverflow", &.{}));
+}
+
+// .rem's plain-float branch had no zero-divisor test (only its success path
+// was covered, via the mod/rem std.math tests elsewhere).
+test "compiler: rem raises DivisionByZero for a plain-float zero divisor" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\func f() float { return 5.0 rem 0.0 }
+    );
+    try std.testing.expectError(error.DivisionByZero, rt.callGlobal("f", &.{}));
+}
+
+// checkFieldNamedTypePredicate (vm.zig) re-validates a struct field's named-
+// type predicate on assignment. When the incoming value is already the
+// correct static type (constructed via the type's own constructor,
+// re-checked at construction time), coerceErasedValueForSpec's fast path
+// means this re-check is redundant -- so the only way to exercise it as a
+// genuine SECOND check is a dynamically-typed (any-erased) assignment that
+// bypasses static construction, confirmed via `gengo run` before writing.
+test "compiler: dot-assigning an any-erased value into a struct field re-checks the named field type's predicate" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Score int predicate func(x) { return x >= 0 and x <= 100 }
+        \\type Player struct { name string, score Score }
+        \\func setField(p any, v any) any { p.score = v; return p }
+        \\func setInvalid() int { p := Player{name: "a", score: Score(50)}; setField(p, 200); return int(p.score) }
+        \\func setValid() int { p := Player{name: "a", score: Score(50)}; setField(p, 80); return int(p.score) }
+    );
+    try std.testing.expectError(error.PredicateFailed, rt.callGlobal("setInvalid", &.{}));
+    try std.testing.expectEqual(@as(i64, 80), (try rt.callGlobal("setValid", &.{})).int);
+}
+
+// opGetLocalGetField's inline-cache path for a heap-backed (>4-field)
+// .struct_instance receiver had no test -- only the small_struct_instance
+// (<=4-field) sibling was exercised (the "fusion: local struct field read"
+// test above uses a 2-field struct).
+test "compiler: dot-field read fuses to get_local_get_field for a heap-backed (>4-field) struct too" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Big struct { a int, b int, c int, d int, e int }
+        \\func fieldRead(p Big) int { return p.a }
+        \\func call() int { return fieldRead(Big{a: 1, b: 2, c: 3, d: 4, e: 5}) }
+    );
+    const c = rt.chunk_state;
+    try std.testing.expectEqual(@as(usize, 1), countOp(c, .get_local_get_field));
+    try std.testing.expectEqual(@as(i64, 1), (try rt.callGlobal("call", &.{})).int);
+}
+
+// opInvokeMethod's inline-cache warming path (patching the type/func-index
+// bytes after resolving a struct method for the first time) had no test
+// using a heap-backed (>4-field) struct receiver.
+test "compiler: calling a method on a heap-backed (>4-field) struct instance warms and uses its call-site inline cache" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Big struct { a int, b int, c int, d int, e int }
+        \\func (b Big) sum() int { return b.a + b.b + b.c + b.d + b.e }
+        \\func f() int {
+        \\    big := Big{a: 1, b: 2, c: 3, d: 4, e: 5}
+        \\    return big.sum()
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 15), (try rt.callGlobal("f", &.{})).int);
+}
+
+// .mul's decimal*scalar success path (decimalScalarPair matching, no
+// overflow) had no test; only its own overflow/type-mismatch arms were
+// covered elsewhere.
+test "compiler: multiplying a named decimal type by a plain int scalar computes correctly" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\type Money decimal 2
+        \\func mulAny(a any, b any) any { return a * b }
+        \\func f() any { return mulAny(Money(5), 3) }
+    );
+    _ = try rt.callGlobal("f", &.{});
+}
