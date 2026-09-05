@@ -18785,3 +18785,62 @@ test "compiler: a panicked struct value survives an allocation inside its own re
     );
     _ = try rt.callGlobal("risky", &.{});
 }
+
+// GC-audit 2026-09, Layer 3: the tail-called-closure bug's own repro used a
+// zero-arg, non-recursive `f()`. These two exercise the shapes an actual
+// tail-recursive program would hit: a self-recursive closure tail-calling
+// itself many times (many collections across the SAME closure's repeated
+// re-entry, not just one), and a closure resolved through an *upvalue cell*
+// rather than a plain local (get_local_const_sub_call_tail, a different
+// bytecode path than the plain call_tail the original repro used, though
+// both funnel through the same tryTailCall). Verified via `gengo disasm`
+// that both actually compile to a tail-call opcode before writing these.
+test "compiler: a self-recursive closure survives many tail calls each allocating before recursing, under GC stress" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func run() int {
+        \\    f := func(n int, acc int) int {
+        \\        if n == 0 {
+        \\            return acc
+        \\        }
+        \\        junk := std.json.parse("[1,2,3]")
+        \\        _ = junk
+        \\        return f(n - 1, acc + n)
+        \\    }
+        \\    return f(50, 0)
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 1275), (try rt.callGlobal("run", &.{})).int);
+}
+
+test "compiler: two closures tail-calling each other through upvalue cells survive under GC stress" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func run() int {
+        \\    var evenFn func(int) int = null
+        \\    var oddFn func(int) int = null
+        \\    evenFn = func(n int) int {
+        \\        if n == 0 {
+        \\            return 1
+        \\        }
+        \\        junk := std.json.parse("[1,2,3]")
+        \\        _ = junk
+        \\        return oddFn(n - 1)
+        \\    }
+        \\    oddFn = func(n int) int {
+        \\        if n == 0 {
+        \\            return 0
+        \\        }
+        \\        junk := std.json.parse("[4,5,6]")
+        \\        _ = junk
+        \\        return evenFn(n - 1)
+        \\    }
+        \\    return evenFn(40)
+        \\}
+    );
+    try std.testing.expectEqual(@as(i64, 1), (try rt.callGlobal("run", &.{})).int);
+}
