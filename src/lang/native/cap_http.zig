@@ -55,7 +55,16 @@ fn buildResponseStruct(ctx: VMContext, status: i32, body: []const u8, hdr_map: s
             try ctx.vs.pushTempRoot(key_val);
             defer ctx.vs.popTempRoot();
             const val_val = try vmgc.makeDynString(ctx, entry.value_ptr.*);
-            hdr_entries[i] = .{ .key = key_val, .value = val_val };
+            // GC-audit 2026-09 (project_gc_rooting_hardening): write through
+            // hdr_obj.map_managed (re-derived), not the captured
+            // `hdr_entries` local — both makeDynString calls above can
+            // allocate and, rarely, trigger compactManagedHeap, which
+            // would relocate hdr_obj's backing away from the address
+            // `hdr_entries` still points to (this array's full length was
+            // already published up front above, so only the write side
+            // needed this fix, unlike the incremental-visibility cases
+            // elsewhere).
+            hdr_obj.map_managed[i] = .{ .key = key_val, .value = val_val };
         }
     }
 
