@@ -169,6 +169,16 @@ pub fn collectGarbage(ctx: VMContext) void {
 
     for (ctx.vs.stack[0..ctx.vs.stack_top]) |v| markValue(ctx, v);
 
+    // A frame's callee is normally also sitting on the operand stack for the
+    // whole call (the stack scan above already covers it), but call_tail
+    // reuses the caller's frame and shrinks stack_top back down — for a
+    // zero-arg tail call that shrinks it to exactly the slot the callee used
+    // to occupy, excluding it from the scan while it's still the function
+    // actively executing. A local (non-global) closure reached this way has
+    // no other root, so without this explicit mark a GC during its own body
+    // can sweep it out from under itself.
+    for (ctx.vs.frames[0..ctx.vs.frame_top]) |f| markObjectQueue(ctx, f.callee);
+
     ctx.gs.syncCompact();
     for (0..ctx.gs.len()) |i| markValue(ctx, ctx.gs.compactValue(i));
 
@@ -215,6 +225,7 @@ pub fn collectGarbage(ctx: VMContext) void {
             for (tvs.stack[0..tvs.stack_top]) |v| markValue(ctx, v);
             for (tvs.temp_roots[0..tvs.temp_root_top]) |v| markValue(ctx, v);
             for (tvs.defer_stack[0..tvs.defer_top]) |v| markValue(ctx, v);
+            for (tvs.frames[0..tvs.frame_top]) |f| markObjectQueue(ctx, f.callee);
         }
         for (slot.mailbox.items) |v| markValue(ctx, v);
     }
