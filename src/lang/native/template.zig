@@ -275,19 +275,33 @@ fn tplSplitPath(ctx: VMContext, s: []const u8, sep: []const u8) !Value {
     defer ctx.vs.popTempRoot();
     const arr = try vmgc.vmAllocManagedSlice(ctx, Value, count);
     // Always copy: the template source may be a GC-managed string, and these
-    // path arrays can outlive it inside a compiled template object. Attach
-    // the slice as it fills so already-copied elements stay traced.
-    obj.* = .{ .array_managed = arr[0..0] };
+    // path arrays can outlive it inside a compiled template object.
+    //
+    // GC-audit 2026-09 (project_gc_rooting_hardening): pre-fill and publish
+    // the full length immediately rather than growing it visible by one
+    // element per iteration while writing through the captured `arr`
+    // local — makeDynString can allocate and, rarely, trigger
+    // compactManagedHeap, which would relocate obj's backing (a write
+    // through the stale `arr` afterward lands in whatever now occupies
+    // that freed memory) and, separately, size any mid-loop relocation
+    // from the length visible *at that point*, permanently losing the
+    // reserved-but-unwritten tail of this allocation. Every slot is a
+    // valid, traceable .null from the start, so no incremental visibility
+    // is needed; write through obj.array_managed (re-derived each time)
+    // instead of `arr`, matching tplParseTag's own ops/args/jmp handling
+    // below.
+    for (arr) |*slot| slot.* = .null;
+    obj.* = .{ .array_managed = arr[0..count] };
     var idx: usize = 0;
     i = 0;
     while (std.mem.indexOfPos(u8, s, i, sep)) |pos| {
-        arr[idx] = try vmgc.makeDynString(ctx, s[i..pos]);
+        const v = try vmgc.makeDynString(ctx, s[i..pos]);
+        obj.array_managed[idx] = v;
         idx += 1;
-        obj.* = .{ .array_managed = arr[0..idx] };
         i = pos + sep.len;
     }
-    arr[idx] = try vmgc.makeDynString(ctx, s[i..]);
-    obj.* = .{ .array_managed = arr[0..count] };
+    const last = try vmgc.makeDynString(ctx, s[i..]);
+    obj.array_managed[idx] = last;
     return .{ .object = obj };
 }
 
