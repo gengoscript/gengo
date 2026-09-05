@@ -18865,3 +18865,65 @@ test "compiler: two closures tail-calling each other through upvalue cells survi
     );
     try std.testing.expectEqual(@as(i64, 1), (try rt.callGlobal("run", &.{})).int);
 }
+
+// Heap-audit 2026-09: build_struct_instance's .variant_ctor case used to
+// allocate shared_values and arm_fields as ONE combined managed-heap block
+// (a comment here explained why: avoiding a stale-slice hazard from two
+// unpublished allocations), sliced into two views. But heap.zig's
+// sweepObjects, compactCountBlocks/compactFillBlocks, and compactUpdateObj
+// all treat shared_values and arm_fields as two INDEPENDENT blocks — freeing
+// (or relocating) them separately. For a "record arm" (has its own fields
+// alongside shared ones — both non-empty), that mismatch double-frees/
+// overlaps the same combined block the moment the variant is swept, which
+// -Dheap_paranoia=true's assertNotLive check catches directly ("freeing ...
+// overlaps live obj N (variant_value)"), and which manifests under ordinary
+// use as free-list corruption ("incorrect alignment" panics deep in an
+// unrelated later allocation, or silently wrong field values). Confirmed via
+// the compiled CLI with a small heap (--heap 128k) forcing enough allocation
+// churn to actually exercise a sweep+reuse cycle within the test's lifetime —
+// verified (git-stash of the fix) that reverting src/lang/vm.zig alone
+// reproduces both the heap_paranoia assertion and wrong field values there.
+// This test uses the same 128k heap_size_bytes via setupApiRuntime as
+// std.sort.by's neighboring test, for the same reason documented there: even
+// with matched heap parameters, this class of bug did NOT reproduce running
+// in-process through this same test (confirmed directly, same git-stash
+// technique) — so, like that test, this is a correctness check that the fix
+// doesn't regress the common case, not a guaranteed failing-without-the-fix
+// repro; the CLI repro above is what actually proves the fix.
+test "compiler: a variant record arm with both shared and own fields survives many constructions under heap pressure" {
+    var rt = try setupApiRuntime(.{
+        .allow_io = false,
+        .heap_size_bytes = 128 * 1024,
+        .max_objects = 2048,
+    });
+    defer rt.deinit();
+
+    try std.testing.expect(rt.run(
+        \\std := import("std")
+        \\type Shape variant {
+        \\    label string, color string,
+        \\    circle { radius int },
+        \\    rect { w int, h int }
+        \\}
+        \\func run() int {
+        \\    i := 0
+        \\    for i < 200 {
+        \\        c := Shape.circle { label: "c" + std.conv.to_string(i), color: "red", radius: i }
+        \\        r := Shape.rect { label: "r" + std.conv.to_string(i), color: "blue", w: i, h: i * 2 }
+        \\        if c.label != "c" + std.conv.to_string(i) { return 1 }
+        \\        if c.radius != i { return 2 }
+        \\        if r.w != i { return 3 }
+        \\        if r.h != i * 2 { return 4 }
+        \\        if r.label != "r" + std.conv.to_string(i) { return 5 }
+        \\        i = i + 1
+        \\    }
+        \\    return 0
+        \\}
+    ) == .ok);
+
+    const result = rt.call("run", &.{});
+    switch (result) {
+        .ok => |v| try std.testing.expect(v == .int and v.int == 0),
+        else => return error.TestUnexpectedResult,
+    }
+}

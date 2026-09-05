@@ -4452,22 +4452,48 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                     const arm = vt.arms[vc.ordinal];
                     const shared_count = vt.shared_fields.len;
                     const arm_field_count = arm.fields.len;
-
-                    const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
-                    defer ctx.vs.popTempRoot();
-
-                    const base = ctx.vs.stack_top - typ_stack_dist;
-                    // Allocate shared_vals and arm_vals as one block: two separate
-                    // vmAllocManagedSlice calls would leave the first's block
-                    // unpublished (not yet attached to obj) while the second
-                    // allocates, letting compaction pack live data on top of it.
                     const total_field_count = shared_count + arm_field_count;
                     // seen/shared_seen are [255]bool; mirror the struct-type branch guard
                     // (st.fields.len > 255) so we never OOB them.
                     if (total_field_count > 255) return error.TooManyStructFields;
-                    const combined_vals = if (total_field_count > 0) try vmgc.vmAllocManagedSlice(ctx, Value, total_field_count) else @as([]Value, &.{});
-                    const shared_vals = combined_vals[0..shared_count];
-                    const arm_vals = combined_vals[shared_count..total_field_count];
+
+                    const obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
+                    defer ctx.vs.popTempRoot();
+                    obj.* = .{ .variant_value = .{
+                        .typ = vc.typ,
+                        .tag = vc.tag,
+                        .ordinal = vc.ordinal,
+                        .payload = .null,
+                        .shared_values = &[_]Value{},
+                        .arm_fields = &[_]Value{},
+                    } };
+
+                    const base = ctx.vs.stack_top - typ_stack_dist;
+                    // GC-audit 2026-09 (project_gc_rooting_hardening): shared_values
+                    // and arm_fields must be two SEPARATE allocations, not one
+                    // combined block sliced in two — heap.zig's sweepObjects,
+                    // compactCountBlocks/compactFillBlocks, and compactUpdateObj
+                    // all treat them as independent blocks (freed/relocated
+                    // separately). An earlier version of this function allocated
+                    // them as one combined block (to dodge a *different* hazard:
+                    // an allocated-but-unpublished block getting compacted away
+                    // between two allocations before either was reachable from
+                    // obj), which caused sweepObjects to double-free/overlap the
+                    // same memory the moment a variant with both non-empty shared
+                    // AND own fields was later swept. Avoid that original hazard
+                    // instead by publishing each allocation to obj (already
+                    // temp-rooted, so reachable) immediately after allocating it,
+                    // before the next allocation can run.
+                    if (shared_count > 0) {
+                        const shared = try vmgc.vmAllocManagedSlice(ctx, Value, shared_count);
+                        for (shared) |*slot| slot.* = .null;
+                        obj.variant_value.shared_values = shared[0..shared_count];
+                    }
+                    if (arm_field_count > 0) {
+                        const arm_vals = try vmgc.vmAllocManagedSlice(ctx, Value, arm_field_count);
+                        for (arm_vals) |*slot| slot.* = .null;
+                        obj.variant_value.arm_fields = arm_vals[0..arm_field_count];
+                    }
 
                     if (arm.has_payload and arm_field_count == 0) {
                         // Single-payload arm with shared fields
@@ -4484,7 +4510,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                                     return error.DuplicateField;
                                 }
                                 shared_seen[idx] = true;
-                                shared_vals[idx] = val;
+                                obj.variant_value.shared_values[idx] = val;
                             } else if (common.streq(key_s, arm.payload_name)) {
                                 if (payload_seen) {
                                     ctx.vs.setRuntimeErr("duplicate field '{s}' in variant literal", .{key_s});
@@ -4509,13 +4535,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                         }
 
                         ctx.vs.stack_top -= typ_stack_dist + 1;
-                        obj.* = .{ .variant_value = .{
-                            .typ = vc.typ,
-                            .tag = vc.tag,
-                            .ordinal = vc.ordinal,
-                            .payload = payload_val,
-                            .shared_values = shared_vals[0..shared_count],
-                        } };
+                        obj.variant_value.payload = payload_val;
                     } else {
                         // Record arm (multi-field arm)
                         const total_fields = shared_count + arm_field_count;
@@ -4530,7 +4550,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                                     return error.DuplicateField;
                                 }
                                 seen[idx] = true;
-                                shared_vals[idx] = val;
+                                obj.variant_value.shared_values[idx] = val;
                             } else if (vmtyp.findFieldIndex(arm.fields, key_s)) |idx| {
                                 const seen_idx = shared_count + idx;
                                 if (seen[seen_idx]) {
@@ -4538,7 +4558,7 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                                     return error.DuplicateField;
                                 }
                                 seen[seen_idx] = true;
-                                arm_vals[idx] = val;
+                                obj.variant_value.arm_fields[idx] = val;
                             } else {
                                 ctx.vs.setRuntimeErr("no field '{s}' on variant '{s}'", .{ key_s, arm.name });
                                 return error.UnknownStructField;
@@ -4558,14 +4578,6 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                         }
 
                         ctx.vs.stack_top -= typ_stack_dist + 1;
-                        obj.* = .{ .variant_value = .{
-                            .typ = vc.typ,
-                            .tag = vc.tag,
-                            .ordinal = vc.ordinal,
-                            .payload = .null,
-                            .shared_values = shared_vals[0..shared_count],
-                            .arm_fields = arm_vals[0..arm_field_count],
-                        } };
                     }
                     try ctx.vs.vmPush(.{ .object = obj });
                 } else if (typ_peek.object.* == .struct_type) {
