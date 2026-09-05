@@ -57,6 +57,77 @@ pub const Policy = struct {
     enable_predicates: bool = true,
 };
 
+// A generation-tagged reference into the GC object pool. A bare *Object
+// doesn't encode which "lifetime" of its pool slot it was captured during,
+// so nothing stops it being read again after the slot was swept and handed
+// to a *different* object — exactly how the tail-called-closure bug
+// (2026-09, Frame.callee) went unnoticed until a stress test got lucky with
+// allocation timing. Handle.get() re-checks the slot's generation (bumped
+// by heap.allocObject every time a slot is (re)used, whether for the first
+// time or after being freed) before handing back the pointer, panicking
+// with the exact call site on a stale read in Debug/ReleaseSafe builds
+// instead of silently returning whatever object now occupies that slot; it
+// compiles to a bare pointer with zero overhead in ReleaseFast, matching how
+// Zig's own safety checks work.
+//
+// Deliberately per-slot, not a single global counter: an object that stays
+// alive and keeps getting marked across many collections must NOT trip this
+// check just because *some* collection happened since it was captured — that
+// is the overwhelmingly common, entirely correct case for any long-lived
+// frame. Only an actual free-and-reuse of this exact slot changes its
+// generation. (A global "has any GC run since capture" counter was tried
+// first and rejected — see git history — for exactly this false-positive.)
+//
+// This is a second, independent line of defense alongside collectGarbage's
+// exhaustive root walk (vm_gc.zig's markVMStateRoots + its comptime field
+// audit): that layer is what prevents a rooted object from ever going
+// stale; this layer makes it loudly obvious if something manages to anyway
+// — a future regression in the root walk, or a spot the audit's
+// struct-field-shape check can't see at all (a plain Zig local captured
+// mid-function rather than a struct field).
+pub const Handle = struct {
+    obj: *Object,
+    generation: u32,
+
+    pub fn make(hs: *heap.State, obj: *Object) Handle {
+        return .{ .obj = obj, .generation = hs.objectGeneration(obj) };
+    }
+
+    pub fn get(self: Handle, hs: *heap.State) *Object {
+        if (comptime builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+            const now = hs.objectGeneration(self.obj);
+            if (now != self.generation) {
+                std.debug.panic("stale Handle read: pool slot generation {d}->{d} — this object was freed and its slot reused after the Handle was captured", .{ self.generation, now });
+            }
+        }
+        return self.obj;
+    }
+};
+
+// Every field Frame needs, unpadded — used only to compute how much
+// trailing padding frame_stride below must add to reach the target
+// power-of-two stride on whatever pointer width this target has.
+const FrameFields = struct {
+    ret_ip: u32,
+    base: u32,
+    defer_base: u16,
+    has_typed_returns: bool,
+    named_return_count: u8,
+    func_arity: u8,
+    callee: Handle,
+};
+
+// frames[frame_top] indexes with a shift, not a multiply, so the stride
+// must be a power of two on every target. The exact 32-byte figure was
+// measured on native 64-bit pointers only (a 24-byte frame measured ~9%
+// SLOWER on fib there — see git history); *Object is 4 bytes on wasm32, so
+// Handle's natural size differs there too, and that platform's stride was
+// never tuned against that specific benchmark. Rather than assert an
+// untested exact byte count on every target, pad up to the next power of
+// two above the natural (unpadded) size, with a floor of 32 so the one
+// platform this was actually measured on keeps its measured stride exactly.
+const frame_stride: usize = @max(32, std.math.ceilPowerOfTwoAssert(usize, @sizeOf(FrameFields)));
+
 pub const Frame = struct {
     // Code, stack, and defer depths are bounded well below their integer
     // ranges; narrow fields cut the per-call frame write from 32 to 24 bytes.
@@ -69,13 +140,18 @@ pub const Frame = struct {
     func_arity: u8,
     // The object as invoked — a .closure or a plain .function. The function
     // object derives from it (cl.func for closures); upvalue access requires
-    // the .closure tag. Replaces the former closure/func_obj pair.
-    callee: *Object,
-    // Never written or read: pads the frame to a 32-byte power-of-2 stride so
-    // frames[frame_top] indexes with a shift, not a multiply. A 24-byte frame
-    // measured ~9% SLOWER on fib despite fewer stores.
-    _stride_pad: u64 = undefined,
+    // the .closure tag. Replaces the former closure/func_obj pair. Handle's
+    // generation field occupies what used to be pure alignment padding
+    // (_stride_pad) on a 64-bit-pointer target, at no extra cost over the
+    // old bare-pointer field there — see frame_stride above for other
+    // targets, which get an explicit trailing pad instead.
+    callee: Handle,
+    _stride_pad: [frame_stride - @sizeOf(FrameFields)]u8 = undefined,
 };
+
+comptime {
+    if (@sizeOf(Frame) != frame_stride) @compileError("vm_state.Frame drifted from its computed power-of-2 stride — Zig's struct layout algorithm may have changed");
+}
 
 pub const PanicFrame = struct { line: u16, name: []const u8 };
 

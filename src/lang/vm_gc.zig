@@ -175,11 +175,14 @@ fn gcCheckIntegrityPostSweep(ctx: VMContext) void {
 // compile-time check that a field can't quietly skip this function AND the
 // audit list at the same time.
 // True for a field type that can hold a live reference into the GC-managed
-// object pool: Value/?Value themselves, *Object/?*Object, or a slice of
-// Value (stack/defer_stack/temp_roots — the actual slice headers are
-// allocated once in State.init and never reassigned, only what they point
-// to changes, so the hazard is always "what's inside", i.e. Value).
+// object pool: Value/?Value themselves, *Object/?*Object, vm_state.Handle
+// (Frame.callee's type — a *Object wrapped with its pool slot's capture-time
+// generation, same underlying hazard), or a slice of Value (stack/
+// defer_stack/temp_roots — the actual slice headers are allocated once in
+// State.init and never reassigned, only what they point to changes, so the
+// hazard is always "what's inside", i.e. Value).
 fn isGcRelevantType(comptime T: type) bool {
+    if (T == vms.Handle) return true;
     return switch (@typeInfo(T)) {
         .pointer => |p| switch (p.size) {
             .one => p.child == Object,
@@ -235,7 +238,7 @@ fn markVMStateRoots(ctx: VMContext, vs: *vms.State) void {
     // actively executing. A local (non-global) closure reached this way has
     // no other root, so without this explicit mark a GC during its own body
     // can sweep it out from under itself.
-    for (vs.frames[0..vs.frame_top]) |f| markObjectQueue(ctx, f.callee);
+    for (vs.frames[0..vs.frame_top]) |f| markObjectQueue(ctx, f.callee.obj);
     for (vs.temp_roots[0..vs.temp_root_top]) |v| markValue(ctx, v);
     for (vs.defer_stack[0..vs.defer_top]) |v| markValue(ctx, v);
     // A panicked value (including one carried by a `trap` slot, which may be

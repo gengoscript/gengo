@@ -39,6 +39,7 @@ const WasmBacking = if (builtin.target.cpu.arch == .wasm32) struct {
     obj_marked: [MaxObjects]bool = [_]bool{false} ** MaxObjects,
     obj_live: [MaxObjects]bool = [_]bool{false} ** MaxObjects,
     obj_next_free: [MaxObjects]u16 = undefined,
+    obj_generation: [MaxObjects]u32 = [_]u32{0} ** MaxObjects,
     mark_worklist: [MaxObjects]*Object = undefined,
 } else struct {};
 
@@ -70,6 +71,19 @@ pub const State = struct {
     obj_marked: []bool = &[_]bool{},
     obj_live: []bool = &[_]bool{},
     obj_next_free: []u16 = &[_]u16{},
+    // Bumped every time a pool slot transitions into use (allocObject),
+    // whether that's its first use or a reuse after being swept. Backs
+    // vm_state.Handle: a Handle captures the slot's generation at creation
+    // and re-checks it before dereferencing, so a read after the slot was
+    // freed and handed to a *different* object is a loud, precisely-located
+    // panic instead of silently returning the wrong live object. Unlike a
+    // single global counter (rejected — see git history: it false-positived
+    // on every Handle that legitimately survives any collection at all,
+    // which is the overwhelmingly common case), this is per-slot: a Handle
+    // into an object that keeps being marked live across many collections
+    // keeps the same generation, so only an *actual* free-and-reuse of that
+    // exact slot trips the check.
+    obj_generation: []u32 = &[_]u32{},
     obj_free_head: u16 = 0xffff,
     obj_live_count: usize = 0,
     // Iterative GC mark worklist (scratch; only valid during a collection).
@@ -93,6 +107,7 @@ pub const State = struct {
             self.obj_marked = &g_wasm_backing.obj_marked;
             self.obj_live = &g_wasm_backing.obj_live;
             self.obj_next_free = &g_wasm_backing.obj_next_free;
+            self.obj_generation = &g_wasm_backing.obj_generation;
             self.mark_worklist = &g_wasm_backing.mark_worklist;
         } else {
             self.heap = try allocator.alignedAlloc(u8, .@"16", heap_size);
@@ -100,6 +115,7 @@ pub const State = struct {
             self.obj_marked = try allocator.alloc(bool, max_objects);
             self.obj_live = try allocator.alloc(bool, max_objects);
             self.obj_next_free = try allocator.alloc(u16, max_objects);
+            self.obj_generation = try allocator.alloc(u32, max_objects);
             self.mark_worklist = try allocator.alloc(*Object, max_objects);
         }
 
@@ -118,6 +134,7 @@ pub const State = struct {
             self.obj_marked[i] = false;
             self.obj_live[i] = false;
             self.obj_next_free[i] = @intCast(i + 1);
+            self.obj_generation[i] = 0;
         }
         if (max_objects > 0) {
             self.obj_next_free[max_objects - 1] = 0xffff;
@@ -175,6 +192,7 @@ pub const State = struct {
         if (self.obj_marked.len > 0) self.allocator.free(self.obj_marked);
         if (self.obj_live.len > 0) self.allocator.free(self.obj_live);
         if (self.obj_next_free.len > 0) self.allocator.free(self.obj_next_free);
+        if (self.obj_generation.len > 0) self.allocator.free(self.obj_generation);
         if (self.mark_worklist.len > 0) self.allocator.free(self.mark_worklist);
         self.* = .{};
     }
@@ -583,8 +601,18 @@ pub const State = struct {
         self.obj_free_head = self.obj_next_free[idx];
         self.obj_live[idx] = true;
         self.obj_marked[idx] = false;
+        self.obj_generation[idx] +%= 1;
         self.obj_live_count += 1;
         return &self.obj_pool[idx];
+    }
+
+    // The slot's current generation, or 0 for a pointer outside the pool
+    // (immortal objects — see isObjectImmortal — have no generation at all,
+    // so a Handle wrapping one always reads as "fresh"; that's correct since
+    // an immortal object is never swept in the first place).
+    pub fn objectGeneration(self: *State, ptr: *Object) u32 {
+        const idx = self.objectIndex(ptr) orelse return 0;
+        return self.obj_generation[idx];
     }
 
     // Returns the object pool index (0..maxObjects-1) or 0xFFFF if ptr is not in the pool.

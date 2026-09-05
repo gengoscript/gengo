@@ -1061,8 +1061,9 @@ inline fn canReturnFast(ctx: VMContext, fi: usize, retval: Value) bool {
     const frame = &ctx.vs.frames[fi];
     if (ctx.vs.defer_top != frame.defer_base) return false;
     if (!frame.has_typed_returns) return true;
-    const f = switch (frame.callee.*) {
-        .function => frame.callee.function,
+    const callee_obj = frame.callee.get(ctx.hs);
+    const f = switch (callee_obj.*) {
+        .function => callee_obj.function,
         .closure => |cl| cl.func.function,
         else => return false,
     };
@@ -1103,7 +1104,7 @@ fn doReturnFast(ctx: VMContext, fi: usize, retval: Value) void {
 fn readUpvalueCell(ctx: VMContext, idx: usize) !*Object {
     if (ctx.vs.frame_top == 0) return error.StackUnderflow;
     const frame = ctx.vs.frames[ctx.vs.frame_top - 1];
-    const cl = frame.callee;
+    const cl = frame.callee.get(ctx.hs);
     if (cl.* != .closure) return error.ImpossibleOpcodeState;
     if (idx >= cl.closure.upvalues.len) return error.ImpossibleOpcodeState;
     return cl.closure.upvalues[idx];
@@ -1130,7 +1131,7 @@ inline fn enterFunctionFrameWarm(ctx: VMContext, f: @import("value.zig").FuncObj
     ctx.vs.frames[ctx.vs.frame_top] = .{
         .ret_ip = @intCast(ctx.vs.ip),
         .base = @intCast(ctx.vs.stack_top - f.arity),
-        .callee = closure orelse func_obj,
+        .callee = vms.Handle.make(ctx.hs, closure orelse func_obj),
         .defer_base = @intCast(ctx.vs.defer_top),
         .has_typed_returns = f.has_typed_returns and !f.returns_proven,
         .named_return_count = f.named_return_count,
@@ -1202,7 +1203,7 @@ fn enterFunctionFrame(ctx: VMContext, f: @import("value.zig").FuncObj, func_obj:
     ctx.vs.frames[ctx.vs.frame_top] = .{
         .ret_ip = @intCast(ctx.vs.ip),
         .base = @intCast(ctx.vs.stack_top - f.arity),
-        .callee = closure orelse func_obj,
+        .callee = vms.Handle.make(ctx.hs, closure orelse func_obj),
         .defer_base = @intCast(ctx.vs.defer_top),
         .has_typed_returns = f.has_typed_returns and !f.returns_proven,
         .named_return_count = f.named_return_count,
@@ -1518,7 +1519,7 @@ fn tryTailCall(ctx: VMContext, argc: u8, args_preverified: bool) !bool {
     if (f.arity != argc) return false;
     if (f.has_typed_params and !args_preverified) try vmtyp.enforceFuncArgTypes(ctx, f, argc);
     for (0..argc) |i| writeFrameLocal(ctx, frame.base + i, ctx.vs.stack[callee_idx + 1 + i]);
-    frame.callee = callee_obj;
+    frame.callee = vms.Handle.make(ctx.hs, callee_obj);
     // The reused frame must carry the NEW callee's return typing — it
     // previously kept the old function's, so a tail call into a typed-return
     // function skipped return enforcement (and vice versa took the slow path).
@@ -1693,7 +1694,7 @@ fn retSlowPath(ctx: VMContext, retval_in: Value) !bool {
         }
         ctx.vs.popTempRoot();
     }
-    const fsig_ret = vmtyp.frameFuncSig(frame.callee) catch null;
+    const fsig_ret = vmtyp.frameFuncSig(frame.callee.get(ctx.hs)) catch null;
     if (fsig_ret) |fsig| {
         if (fsig.named_return_count > 0) {
             ctx.vs.popTempRoot();
@@ -4702,12 +4703,12 @@ fn execOne(ctx: VMContext, comptime op: Op) anyerror!bool {
                 defer ctx.vs.popTempRoot();
                 const ups = try vmgc.vmAllocManagedSlice(ctx, *Object, proto.capture_slots.len);
                 clo.closure.upvalues = ups;
-                const frame = if (ctx.vs.frame_top == 0) vms.Frame{ .ret_ip = 0, .base = 0, .callee = f.object, .defer_base = 0, .has_typed_returns = false, .named_return_count = 0, .func_arity = 0 } else ctx.vs.frames[ctx.vs.frame_top - 1];
+                const frame = if (ctx.vs.frame_top == 0) vms.Frame{ .ret_ip = 0, .base = 0, .callee = vms.Handle.make(ctx.hs, f.object), .defer_base = 0, .has_typed_returns = false, .named_return_count = 0, .func_arity = 0 } else ctx.vs.frames[ctx.vs.frame_top - 1];
                 for (proto.capture_slots, ups) |enc, *u| {
                     const is_upvalue = (enc & 0x80) != 0;
                     const idx = enc & 0x7f;
                     if (is_upvalue) {
-                        const pcl = frame.callee;
+                        const pcl = frame.callee.get(ctx.hs);
                         if (pcl.* != .closure) return error.ImpossibleOpcodeState;
                         if (idx >= pcl.closure.upvalues.len) return error.ImpossibleOpcodeState;
                         u.* = pcl.closure.upvalues[idx];
@@ -5101,7 +5102,7 @@ fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
             fi -= 1;
             const frame = ctx.vs.frames[fi];
             const call_ip = if (frame.ret_ip > 0) frame.ret_ip - 1 else 0;
-            const fname = switch (frame.callee.*) {
+            const fname = switch (frame.callee.get(ctx.hs).*) {
                 .function => |f| f.name,
                 .closure => |cl| cl.func.function.name,
                 else => "",
@@ -5154,7 +5155,7 @@ fn runPanicUnwind(ctx: VMContext, orig_err: anyerror) anyerror!void {
             // Determine the recovered function's return arity before unwinding its frame.
             // If the function returns multiple values, callers expect a tuple; pushing a
             // bare null causes tuple_check_arity to throw TypeError.
-            const rec_fobj = ctx.vs.frames[ctx.vs.frame_top - 1].callee;
+            const rec_fobj = ctx.vs.frames[ctx.vs.frame_top - 1].callee.get(ctx.hs);
             const rec_base = ctx.vs.frames[ctx.vs.frame_top - 1].base;
             const rec_fn: ?*@import("value.zig").FuncObj = switch (rec_fobj.*) {
                 .function => &rec_fobj.function,
