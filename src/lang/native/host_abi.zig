@@ -166,10 +166,23 @@ fn valueFromWireDepth(ctx: VMContext, w: host_abi.ValueWire, depth: u32) !Value 
             const arr_obj = try vmgc.allocTempRooted(ctx, .{ .array_managed = &[_]Value{} });
             defer ctx.vs.popTempRoot();
             const items = try vmgc.vmAllocManagedSlice(ctx, Value, count);
-            arr_obj.* = .{ .array_managed = items[0..0] }; // publish immediately
+            // GC-audit 2026-09 (project_gc_rooting_hardening): pre-fill and
+            // publish the full length immediately rather than "publish
+            // empty, grow visible by one" — that older pattern wrote
+            // through the captured `items` local (a stale-pointer hazard
+            // once compactManagedHeap relocates arr_obj's backing, which
+            // valueFromWireDepth's recursion can trigger), and separately
+            // sized any mid-loop relocation from the *currently visible*
+            // length, permanently losing the reserved-but-unwritten tail
+            // of the allocation. Every slot is a valid, traceable .null
+            // from the start, so no incremental visibility is needed; the
+            // loop below reads/writes through arr_obj's own field instead
+            // of `items`, which is the only thing relocation keeps current.
+            for (items) |*slot| slot.* = .null;
+            arr_obj.* = .{ .array_managed = items[0..count] };
             for (elem_wires, 0..) |ew, i| {
-                items[i] = try valueFromWireDepth(ctx, ew, depth + 1);
-                arr_obj.* = .{ .array_managed = items[0 .. i + 1] }; // grow visible
+                const v = try valueFromWireDepth(ctx, ew, depth + 1);
+                arr_obj.array_managed[i] = v;
             }
             return .{ .object = arr_obj };
         },
@@ -179,14 +192,15 @@ fn valueFromWireDepth(ctx: VMContext, w: host_abi.ValueWire, depth: u32) !Value 
             const map_obj = try vmgc.allocTempRooted(ctx, .{ .map_managed = &[_]MapEntry{} });
             defer ctx.vs.popTempRoot();
             const entries = try vmgc.vmAllocManagedSlice(ctx, MapEntry, count);
-            map_obj.* = .{ .map_managed = entries[0..0] }; // publish immediately
+            // Same reasoning as the .array branch above.
+            for (entries) |*slot| slot.* = .{ .key = .null, .value = .null };
+            map_obj.* = .{ .map_managed = entries[0..count] };
             for (0..count) |i| {
                 const k = try valueFromWireDepth(ctx, pair_wires[i * 2], depth + 1);
                 try ctx.vs.pushTempRoot(k);
-                entries[i].key = k;
-                entries[i].value = try valueFromWireDepth(ctx, pair_wires[i * 2 + 1], depth + 1);
+                const v = try valueFromWireDepth(ctx, pair_wires[i * 2 + 1], depth + 1);
                 ctx.vs.popTempRoot();
-                map_obj.* = .{ .map_managed = entries[0 .. i + 1] }; // grow visible
+                map_obj.map_managed[i] = .{ .key = k, .value = v };
             }
             return .{ .object = map_obj };
         },
