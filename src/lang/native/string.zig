@@ -36,9 +36,21 @@ pub fn nativeStrSplit(ctx: VMContext, s_val: Value, sep_val: Value, managed: boo
     defer ctx.vs.popTempRoot();
     if (count > 0) {
         const pieces = try vmgc.vmAllocManagedSlice(ctx, Value, count);
-        // Attach the slice as it fills: substring() can trigger GC, and
-        // already-filled elements must be traced or they get reclaimed.
-        arr_obj.* = .{ .array_managed = pieces[0..0] };
+        // GC-audit 2026-09 (project_gc_rooting_hardening): pre-fill and
+        // publish the full length immediately rather than growing it
+        // visible by one element per iteration while writing through the
+        // captured `pieces` local — substring()/makeDynString() can
+        // allocate and, rarely, trigger compactManagedHeap, which would
+        // relocate arr_obj's backing (a write through the stale `pieces`
+        // afterward lands in whatever now occupies that freed memory)
+        // and, separately, size any mid-loop relocation from the length
+        // visible at that point, permanently losing the
+        // reserved-but-unwritten tail of this allocation. Every slot is a
+        // valid, traceable .null from the start, so no incremental
+        // visibility is needed; write through arr_obj.array_managed
+        // (re-derived each time) instead of `pieces`.
+        for (pieces) |*slot| slot.* = .null;
+        arr_obj.* = .{ .array_managed = pieces[0..count] };
         if (sep.len == 0) {
             var i: usize = 0;
             var pi: usize = 0;
@@ -48,10 +60,10 @@ pub fn nativeStrSplit(ctx: VMContext, s_val: Value, sep_val: Value, managed: boo
                 // compact, relocating s_val's backing.
                 const s = try vms.asStringValue(s_val);
                 const w = try vmstr.utf8NextRuneByteLen(s, i);
-                pieces[pi] = try substring(ctx, s[i .. i + w], managed);
+                const piece = try substring(ctx, s[i .. i + w], managed);
+                arr_obj.array_managed[pi] = piece;
                 i += w;
                 pi += 1;
-                arr_obj.* = .{ .array_managed = pieces[0..pi] };
             }
         } else {
             var i: usize = 0;
@@ -59,15 +71,15 @@ pub fn nativeStrSplit(ctx: VMContext, s_val: Value, sep_val: Value, managed: boo
             while (true) {
                 const s = try vms.asStringValue(s_val);
                 const pos = std.mem.indexOfPos(u8, s, i, sep) orelse break;
-                pieces[pi] = try substring(ctx, s[i..pos], managed);
+                const piece = try substring(ctx, s[i..pos], managed);
+                arr_obj.array_managed[pi] = piece;
                 pi += 1;
-                arr_obj.* = .{ .array_managed = pieces[0..pi] };
                 i = pos + sep.len;
             }
             const s = try vms.asStringValue(s_val);
-            pieces[pi] = try substring(ctx, s[i..], managed);
+            const piece = try substring(ctx, s[i..], managed);
+            arr_obj.array_managed[pi] = piece;
         }
-        arr_obj.* = .{ .array_managed = pieces[0..count] };
     }
     return .{ .object = arr_obj };
 }
@@ -270,9 +282,12 @@ pub fn nativeStrFields(ctx: VMContext, s_val: Value) !Value {
     defer ctx.vs.popTempRoot();
     if (count > 0) {
         const pieces = try vmgc.vmAllocManagedSlice(ctx, Value, count);
-        // Attach as it fills: makeDynString can trigger GC and earlier
-        // elements must be traced.
-        arr_obj.* = .{ .array_managed = pieces[0..0] };
+        // GC-audit 2026-09 (project_gc_rooting_hardening): pre-fill and
+        // publish the full length immediately, then write through
+        // arr_obj.array_managed (re-derived each time) rather than the
+        // captured `pieces` local — see nativeStrSplit above for why.
+        for (pieces) |*slot| slot.* = .null;
+        arr_obj.* = .{ .array_managed = pieces[0..count] };
         var pi: usize = 0;
         i = 0;
         while (i < s0.len) {
@@ -285,11 +300,9 @@ pub fn nativeStrFields(ctx: VMContext, s_val: Value) !Value {
             const start = i;
             while (i < s.len and !isFieldSep(s[i])) i += 1;
             const piece = try vmgc.makeDynString(ctx, s[start..i]);
-            pieces[pi] = piece;
+            arr_obj.array_managed[pi] = piece;
             pi += 1;
-            arr_obj.* = .{ .array_managed = pieces[0..pi] };
         }
-        arr_obj.* = .{ .array_managed = pieces[0..count] };
     }
     return .{ .object = arr_obj };
 }
@@ -426,9 +439,12 @@ pub fn nativeStrSplitN(ctx: VMContext, s_val: Value, sep_val: Value, n_v: Value)
     const arr_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
     defer ctx.vs.popTempRoot();
     const pieces = try vmgc.vmAllocManagedSlice(ctx, Value, count);
-    // Attach as it fills: makeDynString can trigger GC and earlier elements
-    // must be traced.
-    arr_obj.* = .{ .array_managed = pieces[0..0] };
+    // GC-audit 2026-09 (project_gc_rooting_hardening): pre-fill and
+    // publish the full length immediately, then write through
+    // arr_obj.array_managed (re-derived each time) rather than the
+    // captured `pieces` local — see nativeStrSplit above for why.
+    for (pieces) |*slot| slot.* = .null;
+    arr_obj.* = .{ .array_managed = pieces[0..count] };
     if (sep0.len == 0) {
         // Split at UTF-8 codepoint boundaries (not byte boundaries).
         // Track byte_pos across iterations; re-derive s each time since
@@ -437,17 +453,18 @@ pub fn nativeStrSplitN(ctx: VMContext, s_val: Value, sep_val: Value, n_v: Value)
         var pi: usize = 0;
         while (pi < count) {
             const s = try vms.asStringValue(s_val);
-            if (pi + 1 == count) {
+            const piece = if (pi + 1 == count)
                 // Last piece: remainder of the string (either the last
                 // single rune when no limit hit, or the remaining suffix
                 // when the max cap truncated the split).
-                pieces[pi] = try vmgc.makeDynString(ctx, s[byte_pos..]);
-            } else {
+                try vmgc.makeDynString(ctx, s[byte_pos..])
+            else blk: {
                 const w = try vmstr.utf8NextRuneByteLen(s, byte_pos);
-                pieces[pi] = try vmgc.makeDynString(ctx, s[byte_pos .. byte_pos + w]);
+                const p = try vmgc.makeDynString(ctx, s[byte_pos .. byte_pos + w]);
                 byte_pos += w;
-            }
-            arr_obj.* = .{ .array_managed = pieces[0 .. pi + 1] };
+                break :blk p;
+            };
+            arr_obj.array_managed[pi] = piece;
             pi += 1;
         }
     } else {
@@ -457,15 +474,15 @@ pub fn nativeStrSplitN(ctx: VMContext, s_val: Value, sep_val: Value, n_v: Value)
             const s = try vms.asStringValue(s_val);
             const sep = try vms.asStringValue(sep_val);
             const idx = std.mem.indexOf(u8, s[pos..], sep).?;
-            pieces[pi] = try vmgc.makeDynString(ctx, s[pos .. pos + idx]);
+            const piece = try vmgc.makeDynString(ctx, s[pos .. pos + idx]);
+            arr_obj.array_managed[pi] = piece;
             pos += idx + sep.len;
             pi += 1;
-            arr_obj.* = .{ .array_managed = pieces[0..pi] };
         }
         const s = try vms.asStringValue(s_val);
-        pieces[pi] = try vmgc.makeDynString(ctx, s[pos..]);
+        const piece = try vmgc.makeDynString(ctx, s[pos..]);
+        arr_obj.array_managed[pi] = piece;
     }
-    arr_obj.* = .{ .array_managed = pieces[0..count] };
     return .{ .object = arr_obj };
 }
 

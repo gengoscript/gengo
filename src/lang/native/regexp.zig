@@ -560,13 +560,22 @@ pub fn nativeReFindAll(ctx: VMContext, pattern_val: Value, s_val: Value) !Value 
     const obj = try vmgc.allocTempRooted(ctx, .{ .array_managed = &[_]Value{} });
     defer ctx.vs.popTempRoot();
     const result = try vmgc.vmAllocManagedSlice(ctx, Value, matches.len);
-    obj.* = .{ .array_managed = result[0..0] };
+    // GC-audit 2026-09 (project_gc_rooting_hardening): pre-fill and
+    // publish the full length immediately, then write through
+    // obj.array_managed (re-derived each time) rather than the captured
+    // `result` local — makeDynString can allocate and, rarely, trigger
+    // compactManagedHeap, which would relocate obj's backing (a write
+    // through the stale `result` afterward lands in freed/reused memory)
+    // and, separately, size any mid-loop relocation from the length
+    // visible at that point, losing the reserved-but-unwritten tail.
+    for (result) |*slot| slot.* = .null;
+    obj.* = .{ .array_managed = result[0..matches.len] };
     for (matches, 0..) |m, j| {
         // Re-derive s_val's bytes on every iteration: makeDynString's own
         // allocation can compact and relocate s_val's backing between calls.
         const s_now = try vms.asStringValue(s_val);
-        result[j] = try vmgc.makeDynString(ctx, s_now[m[0]..m[1]]);
-        obj.* = .{ .array_managed = result[0 .. j + 1] };
+        const piece = try vmgc.makeDynString(ctx, s_now[m[0]..m[1]]);
+        obj.array_managed[j] = piece;
     }
     return .{ .object = obj };
 }
@@ -629,13 +638,18 @@ pub fn nativeReSplit(ctx: VMContext, pattern_val: Value, s_val: Value) !Value {
     const obj = try vmgc.allocTempRooted(ctx, .{ .array_managed = &[_]Value{} });
     defer ctx.vs.popTempRoot();
     const result = try vmgc.vmAllocManagedSlice(ctx, Value, parts.items.len);
-    obj.* = .{ .array_managed = result[0..0] };
+    // GC-audit 2026-09 (project_gc_rooting_hardening): pre-fill and
+    // publish the full length immediately, then write through
+    // obj.array_managed (re-derived each time) rather than the captured
+    // `result` local — see nativeReFindAll above for why.
+    for (result) |*slot| slot.* = .null;
+    obj.* = .{ .array_managed = result[0..parts.items.len] };
     for (parts.items, 0..) |part, j| {
         // Re-derive s_val's bytes on every iteration: makeDynString's own
         // allocation can compact and relocate s_val's backing between calls.
         const s_now = try vms.asStringValue(s_val);
-        result[j] = try vmgc.makeDynString(ctx, s_now[part[0]..part[1]]);
-        obj.* = .{ .array_managed = result[0 .. j + 1] };
+        const piece = try vmgc.makeDynString(ctx, s_now[part[0]..part[1]]);
+        obj.array_managed[j] = piece;
     }
     return .{ .object = obj };
 }
