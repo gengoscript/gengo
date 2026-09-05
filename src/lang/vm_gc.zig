@@ -163,12 +163,70 @@ fn gcCheckIntegrityPostSweep(ctx: VMContext) void {
     // heap.paranoia is enabled (via freeBytesManaged).
 }
 
-pub fn collectGarbage(ctx: VMContext) void {
-    const t0 = monoNowNs();
-    ctx.hs.mark_worklist_top = 0;
+// Single source of truth for what counts as a root inside one vm_state.State
+// instance — called once for the currently-running task's ctx.vs and once
+// per parked task's own vs. Before 2026-09 these were two hand-copied walks
+// (one inline here, one in the task loop below); the tail-called-closure bug
+// (frame.callee) and the panicked-struct-value bug (panic_value /
+// pending_panic_value) both happened in exactly the kind of field that's
+// easy to add to one copy and forget in the other, or to forget in both.
+// Routing both call sites through this one function makes that divergence
+// impossible by construction — see gc_audited_state_fields below for the
+// compile-time check that a field can't quietly skip this function AND the
+// audit list at the same time.
+// True for a field type that can hold a live reference into the GC-managed
+// object pool: Value/?Value themselves, *Object/?*Object, or a slice of
+// Value (stack/defer_stack/temp_roots — the actual slice headers are
+// allocated once in State.init and never reassigned, only what they point
+// to changes, so the hazard is always "what's inside", i.e. Value).
+fn isGcRelevantType(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .pointer => |p| switch (p.size) {
+            .one => p.child == Object,
+            .slice => p.child == Value,
+            else => false,
+        },
+        .optional => |o| isGcRelevantType(o.child),
+        else => T == Value,
+    };
+}
 
-    for (ctx.vs.stack[0..ctx.vs.stack_top]) |v| markValue(ctx, v);
+// Every vm_state.State field for which isGcRelevantType is true must appear
+// here, tagged with why it's safe:
+//   - "rooted": walked by markVMStateRoots above.
+//   - the type-cache fields: allocated via ctx.hs.bump (the permanent
+//     region), never through vmAllocObject, so they're outside the
+//     collectible pool entirely (heap.isObjectImmortal) and can never be
+//     swept regardless of marking — see native/arg.zig's argGetType for the
+//     pattern all five follow.
+// A field landing in neither markVMStateRoots nor this list is exactly how
+// the frame.callee and panic_value/pending_panic_value bugs (found 2026-09)
+// happened — this comptime check turns "forgot to classify a new pointer
+// field" from a stress-test flake into a build failure.
+const gc_audited_state_fields = std.StaticStringMap(void).initComptime(.{
+    .{"stack"},             .{"frames"},
+    .{"temp_roots"},        .{"defer_stack"},
+    .{"panic_value"},       .{"pending_panic_value"},
+    .{"std_module"},        .{"arg_type_cache"},
+    .{"jv_type_cache"},     .{"time_type_cache"},
+    .{"regexp_type_cache"}, .{"template_type_cache"},
+});
 
+comptime {
+    for (@typeInfo(vms.State).@"struct".fields) |f| {
+        if (isGcRelevantType(f.type) and !gc_audited_state_fields.has(f.name)) {
+            @compileError("vm_state.State.\"" ++ f.name ++ "\" can hold a live GC object/value but is not in vm_gc.gc_audited_state_fields — mark it in markVMStateRoots (if it can outlive a single non-allocating expression) or add it to the list with a comment justifying why it's safe unrooted");
+        }
+    }
+    for (@typeInfo(vms.Frame).@"struct".fields) |f| {
+        if (isGcRelevantType(f.type) and !std.mem.eql(u8, f.name, "callee")) {
+            @compileError("vm_state.Frame.\"" ++ f.name ++ "\" can hold a live GC object/value but markVMStateRoots only walks Frame.callee — update it and this check");
+        }
+    }
+}
+
+fn markVMStateRoots(ctx: VMContext, vs: *vms.State) void {
+    for (vs.stack[0..vs.stack_top]) |v| markValue(ctx, v);
     // A frame's callee is normally also sitting on the operand stack for the
     // whole call (the stack scan above already covers it), but call_tail
     // reuses the caller's frame and shrinks stack_top back down — for a
@@ -177,14 +235,29 @@ pub fn collectGarbage(ctx: VMContext) void {
     // actively executing. A local (non-global) closure reached this way has
     // no other root, so without this explicit mark a GC during its own body
     // can sweep it out from under itself.
-    for (ctx.vs.frames[0..ctx.vs.frame_top]) |f| markObjectQueue(ctx, f.callee);
+    for (vs.frames[0..vs.frame_top]) |f| markObjectQueue(ctx, f.callee);
+    for (vs.temp_roots[0..vs.temp_root_top]) |v| markValue(ctx, v);
+    for (vs.defer_stack[0..vs.defer_top]) |v| markValue(ctx, v);
+    // A panicked value (including one carried by a `trap` slot, which may be
+    // an arbitrary struct/array/map, not just an error) is held only here
+    // for the entire defer-unwind window — and that window runs arbitrary
+    // user code (every remaining defer up the call stack) before whichever
+    // defer eventually calls recover() reads it back out. Confirmed
+    // reachable-but-unrooted via a reproduction that panics with a struct
+    // and allocates inside the recovering defer before calling recover().
+    markValue(ctx, vs.panic_value);
+    markValue(ctx, vs.pending_panic_value);
+    if (vs.std_module) |m| markObjectQueue(ctx, m);
+}
+
+pub fn collectGarbage(ctx: VMContext) void {
+    const t0 = monoNowNs();
+    ctx.hs.mark_worklist_top = 0;
+
+    markVMStateRoots(ctx, ctx.vs);
 
     ctx.gs.syncCompact();
     for (0..ctx.gs.len()) |i| markValue(ctx, ctx.gs.compactValue(i));
-
-    if (ctx.vs.std_module) |m| markObjectQueue(ctx, m);
-
-    for (ctx.vs.temp_roots[0..ctx.vs.temp_root_top]) |v| markValue(ctx, v);
 
     // Only constants holding heap objects are roots; scalars and strings need
     // no marking. addConst records their indices so this walk skips the bulk
@@ -193,8 +266,6 @@ pub fn collectGarbage(ctx: VMContext) void {
     for (ctx.cs.obj_const_idxs[0..ctx.cs.obj_const_count]) |ci| {
         if (ci < ctx.cs.const_count) markValue(ctx, ctx.cs.consts[ci]);
     }
-
-    for (ctx.vs.defer_stack[0..ctx.vs.defer_top]) |v| markValue(ctx, v);
 
     // Task/actor roots (dev-docs/design/task-actor-design.md §3.5). GC
     // only ever runs from the currently-running task's own allocation
@@ -207,8 +278,8 @@ pub fn collectGarbage(ctx: VMContext) void {
     // queued between send() and the eventual receive() must not be
     // swept out from under it.
     //
-    // Skips task_state.current: that task's stack/temp_roots/defer_stack
-    // is exactly what the walk above just marked via ctx.vs (the two are
+    // Skips task_state.current: that task's own state is exactly what
+    // markVMStateRoots(ctx, ctx.vs) above just marked (the two are
     // guaranteed to be the same vm_state — the scheduler always
     // constructs ctx from tasks_mod.g_state.slots[current].vs before
     // calling into the VM). Marking would still be correct without this
@@ -221,12 +292,7 @@ pub fn collectGarbage(ctx: VMContext) void {
     for (tasks_mod.g_state.slots[0..tasks_mod.MaxTasks], 0..) |*slot, idx| {
         if (slot.status == .empty or slot.status == .dead) continue;
         if (idx == tasks_mod.g_state.current) continue;
-        if (slot.vs) |tvs| {
-            for (tvs.stack[0..tvs.stack_top]) |v| markValue(ctx, v);
-            for (tvs.temp_roots[0..tvs.temp_root_top]) |v| markValue(ctx, v);
-            for (tvs.defer_stack[0..tvs.defer_top]) |v| markValue(ctx, v);
-            for (tvs.frames[0..tvs.frame_top]) |f| markObjectQueue(ctx, f.callee);
-        }
+        if (slot.vs) |tvs| markVMStateRoots(ctx, tvs);
         for (slot.mailbox.items) |v| markValue(ctx, v);
     }
     // The current task's mailbox is still a root even though its stack

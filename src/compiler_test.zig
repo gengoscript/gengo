@@ -18737,3 +18737,51 @@ test "compiler: multiplying a named decimal type by a plain int scalar computes 
     );
     _ = try rt.callGlobal("f", &.{});
 }
+
+// GC-audit 2026-09: a panicked struct value (via a `trap` slot) is held only
+// in vs.panic_value/pending_panic_value for the entire defer-unwind window —
+// collectGarbage never marked either field as a root. Allocating anything
+// inside the recovering defer before calling recover() (as this test's
+// json.parse loop does) gives a GC a chance to sweep the panicked struct's
+// object out from under itself and hand its pool slot to something else,
+// the same bug class as the tail-called-closure fix above.
+//
+// mayFail deliberately uses named returns (the "spread" return path, which
+// never boxes a tuple — see retSlowPath's named_return_count branch) rather
+// than a plain `(int, ?Boom)` return: with a plain multi-return, op_trap_check
+// raises TrapFired without popping the still-on-stack return tuple, and that
+// tuple's own array happens to keep the struct rooted through the stack scan
+// for the rest of this test — masking the exact bug this test exists to
+// catch. Confirmed by reproduction: this test fails (tag mismatch on the
+// recovered value) under -Dgc_stress=true without the vm_gc.zig fix, and
+// passes with a plain tuple return even without the fix. Only reproduces
+// under -Dgc_stress=true; kept here so the gc-stress CI lane guards it
+// permanently.
+test "compiler: a panicked struct value survives an allocation inside its own recovering defer" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\type Boom struct { code int }
+        \\func mayFail(fail bool) (val int, err ?Boom) {
+        \\    if fail { val = 0; err = Boom{code: 42}; return }
+        \\    val = 1
+        \\    return
+        \\}
+        \\func risky() int {
+        \\    defer func() {
+        \\        for i := 0; i < 200; i += 1 {
+        \\            junk := std.json.parse("[1,2,3,4,5,6,7,8,9,10]")
+        \\            _ = junk
+        \\        }
+        \\        payload := std.core.recover()
+        \\        if payload != null {
+        \\            assert payload.code == 42
+        \\        }
+        \\    }()
+        \\    val, trap := mayFail(true)
+        \\    return val
+        \\}
+    );
+    _ = try rt.callGlobal("risky", &.{});
+}
