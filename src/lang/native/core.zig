@@ -735,13 +735,21 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
             const out = try vmgc.vmAllocManagedSlice(ctx, Value, items_len);
             for (out) |*slot| slot.* = .null;
             out_obj.* = .{ .array_managed = out[0..items_len] };
-            // Re-derive src's slice fresh each iteration: cloneValue
-            // recurses and can allocate, so a slice captured once before
-            // (or even at the top of) this loop can go stale partway
-            // through it.
+            // Re-derive both src's AND out_obj's slices fresh each
+            // iteration, and only through out_obj's own field (never the
+            // captured `out` local): cloneValue recurses and can allocate,
+            // which can trigger compactManagedHeap and relocate either
+            // block. src's read side going stale is a wrong-value read;
+            // out_obj's write side going stale (writing through the
+            // captured `out` after ITS backing moved) is worse — a write
+            // into freed/reused memory, corrupting whatever now lives
+            // there. compactUpdateObj keeps out_obj.array_managed itself
+            // correct at every step, which is why the write below goes
+            // through it instead of `out`.
             for (0..items_len) |i| {
                 const item = (try vms.asArraySlice(src))[i];
-                out[i] = try cloneValue(ctx, item, visits, visit_len);
+                const cloned = try cloneValue(ctx, item, visits, visit_len);
+                out_obj.array_managed[i] = cloned;
             }
             return .{ .object = out_obj };
         },
@@ -789,12 +797,19 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
             const out_obj = try vmgc.allocTempRooted(ctx, .{ .array = &[_]Value{} });
             defer ctx.vs.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);
-            const fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, inst.fields.len);
+            const field_count = inst.fields.len;
+            const fields = try vmgc.vmAllocManagedSlice(ctx, MapEntry, field_count);
             for (fields) |*slot| slot.* = .{ .key = .null, .value = .null };
             out_obj.* = .{ .struct_instance = .{ .typ = inst.typ, .fields = fields } };
-            for (inst.fields, 0..) |field, i| {
-                fields[i].key = field.key;
-                fields[i].value = try cloneValue(ctx, field.value, visits, visit_len);
+            // Re-derive both src's AND out_obj's fields fresh each
+            // iteration, and only through out_obj's own field for the
+            // write side — same reasoning as the array_managed branch
+            // above (`inst`/`fields` are stale-capture hazards; cloneValue
+            // can allocate and trigger compactManagedHeap).
+            for (0..field_count) |i| {
+                const field = src.struct_instance.fields[i];
+                const cloned = try cloneValue(ctx, field.value, visits, visit_len);
+                out_obj.struct_instance.fields[i] = .{ .key = field.key, .value = cloned };
             }
             return .{ .object = out_obj };
         },
@@ -814,17 +829,40 @@ fn cloneObject(ctx: VMContext, src: *Object, visits: []CloneVisit, visit_len: *u
             try ctx.vs.pushTempRoot(.{ .object = out_obj });
             defer ctx.vs.popTempRoot();
             try cloneRemember(src, out_obj, visits, visit_len);
-            var shared = try vmgc.vmAllocManagedSlice(ctx, Value, vv.shared_values.len);
-            out_obj.variant_value.shared_values = shared[0..0]; // publish immediately
-            for (vv.shared_values, 0..) |sv, i| {
-                shared[i] = try cloneValue(ctx, sv, visits, visit_len);
-                out_obj.variant_value.shared_values = shared[0 .. i + 1]; // grow visible
+            // GC-audit 2026-09 (project_gc_rooting_hardening): this used to
+            // publish an empty slice and "grow visible" by one element per
+            // iteration, to keep the marker from tracing past-the-end
+            // uninitialized memory. That's unsafe for a different reason:
+            // compactManagedHeap sizes the block it relocates from the
+            // *currently visible* length (see heap.zig's compactFillBlocks),
+            // so a compaction mid-loop would only preserve the
+            // already-grown prefix — the reserved-but-not-yet-written tail
+            // of the original allocation is silently lost, and writing into
+            // it afterward (which the old code also did through a captured
+            // local slice, a second, independent hazard) would land in
+            // freed/reused memory. Pre-fill with .null and publish the full
+            // length immediately instead, matching the array_managed/
+            // struct_instance branches above: every slot is always a valid,
+            // traceable Value, so no incremental visibility is needed, and
+            // writes go through out_obj's own (always-current) field rather
+            // than a captured local.
+            const shared_len = vv.shared_values.len;
+            const shared = try vmgc.vmAllocManagedSlice(ctx, Value, shared_len);
+            for (shared) |*slot| slot.* = .null;
+            out_obj.variant_value.shared_values = shared[0..shared_len];
+            for (0..shared_len) |i| {
+                const sv = src.variant_value.shared_values[i];
+                const cloned = try cloneValue(ctx, sv, visits, visit_len);
+                out_obj.variant_value.shared_values[i] = cloned;
             }
-            var arm = try vmgc.vmAllocManagedSlice(ctx, Value, vv.arm_fields.len);
-            out_obj.variant_value.arm_fields = arm[0..0]; // publish immediately
-            for (vv.arm_fields, 0..) |af, i| {
-                arm[i] = try cloneValue(ctx, af, visits, visit_len);
-                out_obj.variant_value.arm_fields = arm[0 .. i + 1]; // grow visible
+            const arm_len = vv.arm_fields.len;
+            const arm = try vmgc.vmAllocManagedSlice(ctx, Value, arm_len);
+            for (arm) |*slot| slot.* = .null;
+            out_obj.variant_value.arm_fields = arm[0..arm_len];
+            for (0..arm_len) |i| {
+                const af = src.variant_value.arm_fields[i];
+                const cloned = try cloneValue(ctx, af, visits, visit_len);
+                out_obj.variant_value.arm_fields[i] = cloned;
             }
             out_obj.variant_value.payload = try cloneValue(ctx, vv.payload, visits, visit_len);
             return .{ .object = out_obj };
