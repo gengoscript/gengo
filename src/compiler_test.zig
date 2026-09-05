@@ -18569,6 +18569,27 @@ test "compiler: assert's message argument formats a bool or float value, not jus
     try std.testing.expectEqualStrings("3.5", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
 }
 
+// GC-audit 2026-09: panicMessageFromValue's dyn_string/string_view branches
+// used to return a raw slice into the compacting managed heap, held in
+// pending_panic_message across the (believed but unenforced) allocation-free
+// window until runPanicUnwind reads it back. Fixed to copy into the stable
+// runtime_err_buf immediately instead. This exercises that branch with a
+// genuinely heap-allocated (concatenation-produced) dyn_string message,
+// not a compile-time string constant.
+test "compiler: assert's message argument accepts a dynamically-built (dyn_string) message" {
+    var rt = try setup();
+    defer rt.deinit();
+    try runSrc(&rt,
+        \\std := import("std")
+        \\func withDynString() {
+        \\    msg := "bad value: " + std.conv.to_string(42)
+        \\    assert false, msg
+        \\}
+    );
+    try std.testing.expectError(error.AssertionFailed, rt.callGlobal("withDynString", &.{}));
+    try std.testing.expectEqualStrings("bad value: 42", rt.last_runtime_msg_buf[0..rt.last_runtime_msg_len]);
+}
+
 // compareNumericPair's SECOND non-finite check (vm.zig ~211-213) is reached
 // when the operands are a plain int mixed with a plain float (not caught by
 // either same-type fast path above it, since a==.int/b==.int and

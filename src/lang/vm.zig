@@ -56,8 +56,23 @@ fn isModuleNamespaceStruct(typ: *Object) bool {
 fn panicMessageFromValue(ctx: VMContext, v: Value) []const u8 {
     if (v == .string) return v.string.bytes;
     if (v == .object) {
-        if (v.object.* == .dyn_string) return v.object.dyn_string;
-        if (v.object.* == .string_view) return v.object.string_view.bytes;
+        // dyn_string/string_view point into the compacting managed heap.
+        // The caller stores this return value in pending_panic_message,
+        // which is read back later by runPanicUnwind — copy into the
+        // stable runtime_err_buf right now instead of handing back a raw
+        // slice into GC memory, so this can never become a stale-slice
+        // hazard regardless of what runs between here and that later read
+        // (currently believed allocation-free, but that's an invariant of
+        // the panic-unwind call chain, not something this function should
+        // have to trust). See GC-audit 2026-09 (project_gc_rooting_hardening).
+        if (v.object.* == .dyn_string) {
+            ctx.vs.setRuntimeErr("{s}", .{v.object.dyn_string});
+            return ctx.vs.runtimeErrMsg();
+        }
+        if (v.object.* == .string_view) {
+            ctx.vs.setRuntimeErr("{s}", .{v.object.string_view.bytes});
+            return ctx.vs.runtimeErrMsg();
+        }
     }
     if (v == .int) {
         return std.fmt.bufPrint(&ctx.vs.fmt_scratch, "{d}", .{v.int}) catch "AssertionFailed";
@@ -1008,14 +1023,26 @@ fn validateNamedCollectionElements(ctx: VMContext, typ_obj: *Object, val: Value)
     switch (nt.base) {
         .array_t => {
             const elem_spec = nt.elem_spec orelse return;
-            const items = try vms.asArraySlice(inner.object);
-            for (items) |item| try validateErasedNamedValueForSpec(ctx, elem_spec, item);
+            // Re-derive the slice every iteration rather than caching it
+            // once (GC-audit 2026-09 / stale-slice class, see array.zig's
+            // itemAt): validateErasedNamedValueForSpec can construct a named
+            // value and run its predicate, a reentrant call that — rarely,
+            // under real fragmentation — can trigger compactManagedHeap and
+            // relocate inner.object's backing storage. A slice captured
+            // before this loop would then be stale for the rest of it.
+            const n = (try vms.asArraySlice(inner.object)).len;
+            for (0..n) |i| {
+                const item = (try vms.asArraySlice(inner.object))[i];
+                try validateErasedNamedValueForSpec(ctx, elem_spec, item);
+            }
         },
         .map_t => {
             const key_spec = nt.key_spec orelse return;
             const value_spec = nt.val_spec orelse return;
-            const entries = try vms.asMapSlice(inner.object);
-            for (entries) |entry| {
+            // Same re-derivation reasoning as the array_t branch above.
+            const n = (try vms.asMapSlice(inner.object)).len;
+            for (0..n) |i| {
+                const entry = (try vms.asMapSlice(inner.object))[i];
                 try validateErasedNamedValueForSpec(ctx, key_spec, entry.key);
                 try validateErasedNamedValueForSpec(ctx, value_spec, entry.value);
             }
@@ -1050,6 +1077,25 @@ pub fn checkNamedTypePredicateChain(ctx: VMContext, nt_obj: *Object, inner: Valu
         chain_len += 1;
         cur = vmtyp.resolveParentType(ctx, t);
     }
+    // GC-audit 2026-09 (project_gc_rooting_hardening): `chain` is a plain
+    // Zig local, not a vm_state.State field, so it's invisible to
+    // markVMStateRoots' root walk — and the loop below makes a reentrant,
+    // arbitrary-allocating callFunction (inside checkNamedTypePredicate) once
+    // per entry. Every entry that actually reaches that call is a
+    // user-declared `type X ... predicate ...`, which the compiler always
+    // registers as a global, so today every such entry is already
+    // double-rooted there (an anonymous named_type — e.g. a synthesized
+    // []T element spec — can appear unrooted in this chain too, but never
+    // carries a predicate, so it never reaches the call). That's the same
+    // "it happens to also be reachable elsewhere" reasoning that let the
+    // frame.callee and panic_value bugs go unnoticed — root every entry
+    // explicitly instead of relying on it.
+    var rooted: usize = 0;
+    for (chain[0..chain_len]) |t| {
+        try ctx.vs.pushTempRoot(.{ .object = t });
+        rooted += 1;
+    }
+    defer for (0..rooted) |_| ctx.vs.popTempRoot();
     // Evaluate from root to current (reverse order).
     var i: usize = chain_len;
     while (i > 0) : (i -= 1) {
