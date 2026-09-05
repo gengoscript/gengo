@@ -1114,6 +1114,50 @@ fn propVariantExplosion() void {
         \\}
         \\assert core.len(nodes) == 30, "variant explosion count"
         ,
+        // Record arm with BOTH shared fields and its own fields, constructed
+        // repeatedly with allocating (concatenated) field values. Heap-audit
+        // 2026-09 (project_variant_double_free_bug): build_struct_instance
+        // used to allocate shared_values/arm_fields as one combined block,
+        // which heap.zig's sweepObjects/compaction bookkeeping (each treating
+        // them as two independent blocks) would double-free the moment such
+        // a variant was swept — the existing cases above only ever use
+        // single-payload arms (no shared fields), which never touch that
+        // code path at all. This one specifically needs BOTH non-empty to
+        // exercise it. 30 shared fields (not fewer) and -Dpreset=256k (not
+        // the default 1m) both matter: confirmed by bisection against the
+        // pre-fix commit (53c7842) that a smaller field count or the default
+        // heap preset does NOT reproduce the double-free within 400
+        // iterations, but this exact shape reproduces reliably within 100 —
+        // see fuzz-heap-paranoia, which is the build step that actually runs
+        // this under -Dheap_paranoia=true.
+        \\std := import("std")
+        \\type Big variant {
+        \\    s0 string, s1 string, s2 string, s3 string, s4 string,
+        \\    s5 string, s6 string, s7 string, s8 string, s9 string,
+        \\    s10 string, s11 string, s12 string, s13 string, s14 string,
+        \\    s15 string, s16 string, s17 string, s18 string, s19 string,
+        \\    s20 string, s21 string, s22 string, s23 string, s24 string,
+        \\    s25 string, s26 string, s27 string, s28 string, s29 string,
+        \\    arm { payload int, extra string }
+        \\}
+        \\i := 0
+        \\for i < 100 {
+        \\    b := Big.arm {
+        \\        s0: "a" + std.conv.to_string(i), s1: "b" + std.conv.to_string(i), s2: "c" + std.conv.to_string(i), s3: "d" + std.conv.to_string(i), s4: "e" + std.conv.to_string(i),
+        \\        s5: "f" + std.conv.to_string(i), s6: "g" + std.conv.to_string(i), s7: "h" + std.conv.to_string(i), s8: "i" + std.conv.to_string(i), s9: "j" + std.conv.to_string(i),
+        \\        s10: "k" + std.conv.to_string(i), s11: "l" + std.conv.to_string(i), s12: "m" + std.conv.to_string(i), s13: "n" + std.conv.to_string(i), s14: "o" + std.conv.to_string(i),
+        \\        s15: "p" + std.conv.to_string(i), s16: "q" + std.conv.to_string(i), s17: "r" + std.conv.to_string(i), s18: "s" + std.conv.to_string(i), s19: "t" + std.conv.to_string(i),
+        \\        s20: "u" + std.conv.to_string(i), s21: "v" + std.conv.to_string(i), s22: "w" + std.conv.to_string(i), s23: "x" + std.conv.to_string(i), s24: "y" + std.conv.to_string(i),
+        \\        s25: "z" + std.conv.to_string(i), s26: "A" + std.conv.to_string(i), s27: "B" + std.conv.to_string(i), s28: "C" + std.conv.to_string(i), s29: "D" + std.conv.to_string(i),
+        \\        payload: i, extra: "e" + std.conv.to_string(i)
+        \\    }
+        \\    assert b.s0 == "a" + std.conv.to_string(i), "s0"
+        \\    assert b.s29 == "D" + std.conv.to_string(i), "s29"
+        \\    assert b.payload == i, "payload"
+        \\    assert b.extra == "e" + std.conv.to_string(i), "extra"
+        \\    i = i + 1
+        \\}
+        ,
         // Variant in map values: named dispatch over heterogeneous payload types
         \\std := import("std")
         \\core := std.core

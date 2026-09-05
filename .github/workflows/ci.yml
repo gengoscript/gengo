@@ -208,3 +208,40 @@ jobs:
           echo "$PWD/binaryen-${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
       - name: Run tests with heap paranoia (assert no live regions overwritten)
         run: zig build -Dpreset=dev -Dheap_paranoia=true test
+
+  fuzz-heap-paranoia-test:
+    # Separate from heap-paranoia-test above on purpose: that job runs the
+    # full suite (conformance/chaos/unit) at the default -Dpreset=dev (1m
+    # heap), which does not sweep+reuse managed-heap blocks enough to ever
+    # exercise heap_paranoia's assertNotLive check for most object shapes —
+    # confirmed directly (see project_variant_double_free_bug memory) that
+    # -Dpreset=256k alone on the existing suite did NOT catch the variant
+    # double-free bug fixed in ba77d1f. This job instead runs the fuzz
+    # runner's own allocation-churn cases (loops of hundreds of iterations,
+    # not one-shot conformance scripts) under BOTH heap_paranoia AND a small
+    # (256k) heap together, which is the combination that actually catches
+    # that bug class — see fuzz_runner.zig's "record arm with both shared
+    # and own fields" case for why the shape matters too, not just the heap
+    # size.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install wasmtime
+        run: |
+          set -euo pipefail
+          TARBALL="wasmtime-${WASMTIME_VERSION}-x86_64-linux.tar.xz"
+          URL="https://github.com/bytecodealliance/wasmtime/releases/download/${WASMTIME_VERSION}/${TARBALL}"
+          for attempt in 1 2 3; do
+            curl -fsSL --retry 3 --retry-delay 5 "$URL" -o "/tmp/${TARBALL}" && break
+            [ "$attempt" -lt 3 ] && sleep 15 || exit 1
+          done
+          echo "${WASMTIME_SHA256}  /tmp/${TARBALL}" | sha256sum --check --strict
+          tar -xJf "/tmp/${TARBALL}" -C /tmp
+          mkdir -p "$HOME/.wasmtime/bin"
+          mv "/tmp/wasmtime-${WASMTIME_VERSION}-x86_64-linux/wasmtime" "$HOME/.wasmtime/bin/"
+          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+      - name: Run fuzz tests with heap paranoia under a small heap
+        run: zig build fuzz-heap-paranoia -Dpreset=256k

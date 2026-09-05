@@ -151,6 +151,37 @@ pub fn build(b: *std.Build) void {
     const run_fuzz_gc_stress = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
     run_fuzz_gc_stress.addArtifactArg(fuzz_gc_stress_exe);
 
+    // Catches the class of bug fixed in ba77d1f (variant literal construction
+    // double-freeing shared_values/arm_fields): gc_stress alone never found
+    // that one because it forces extra *mark-sweep* passes, not the managed
+    // heap's compacting last-resort fallback that the double-free corrupted.
+    // heap_paranoia asserts at the exact moment a bad free/reuse happens
+    // (see project_variant_double_free_bug memory) instead of however much
+    // later the corruption is finally read and crashes, which is what
+    // actually made this bug findable at all. Reuses runtime_config_mod (the
+    // top-level -Dpreset, not a hardcoded one) so CI can pass a small preset
+    // — the existing conformance/fuzz corpus does not sweep+reuse enough
+    // under the default 1m preset to ever exercise this class; a small heap
+    // forces that cycle within the run.
+    const fuzz_heap_paranoia_opts = b.addOptions();
+    fuzz_heap_paranoia_opts.addOption(bool, "perf", false);
+    fuzz_heap_paranoia_opts.addOption(bool, "gc_stress", false);
+    fuzz_heap_paranoia_opts.addOption(bool, "heap_paranoia", true);
+    fuzz_heap_paranoia_opts.addOption(bool, "cap_net", cap_net_opt);
+    fuzz_heap_paranoia_opts.addOption(bool, "cap_http", cap_http_opt);
+    fuzz_heap_paranoia_opts.addOption(bool, "cap_fs", cap_fs_opt);
+    fuzz_heap_paranoia_opts.addOption(bool, "cap_env", cap_env_opt);
+    fuzz_heap_paranoia_opts.addOption(bool, "cap_ffi", false);
+    fuzz_heap_paranoia_opts.addOption(bool, "predicates", predicates_opt);
+    fuzz_heap_paranoia_opts.addOption(bool, "gengo_host", gengo_host_opt);
+    fuzz_heap_paranoia_opts.addOption(bool, "gbc", gbc_opt);
+    fuzz_heap_paranoia_opts.addOption(bool, "repl", false);
+    fuzz_heap_paranoia_opts.addOption([]const u8, "version", gengo_version);
+    const fuzz_heap_paranoia_opts_mod = fuzz_heap_paranoia_opts.createModule();
+    const fuzz_heap_paranoia_exe = addWasmExe(b, "fuzz-runner-heap-paranoia", "src/fuzz_runner.zig", wasm_target, .Debug, fuzz_heap_paranoia_opts_mod, runtime_config_mod);
+    const run_fuzz_heap_paranoia = b.addSystemCommand(&.{ wasmtime_opt, "--dir", "/" });
+    run_fuzz_heap_paranoia.addArtifactArg(fuzz_heap_paranoia_exe);
+
     // ── Native test runner (replaces bash scripts) ────────────────────────────
 
     const test_runner_mod = b.createModule(.{
@@ -607,6 +638,9 @@ pub fn build(b: *std.Build) void {
 
     const fuzz_gc_stress_step = b.step("fuzz-gc-stress", "Run fuzz tests under gc_stress (GC on every allocation)");
     fuzz_gc_stress_step.dependOn(&run_fuzz_gc_stress.step);
+
+    const fuzz_heap_paranoia_step = b.step("fuzz-heap-paranoia", "Run fuzz tests under heap_paranoia (assert no live regions overwritten); pair with -Dpreset=256k or smaller to actually force a sweep+reuse cycle");
+    fuzz_heap_paranoia_step.dependOn(&run_fuzz_heap_paranoia.step);
 
     // ── Native CLI ────────────────────────────────────────────────────────────
 
